@@ -34,6 +34,25 @@ A local-first PDF translation workspace with side-by-side reading, layout-aware 
 
 > Layout decisions use document geometry, typography, and structure. Complex regions may retain the complete original with an explanation. Successful translation of every region in every PDF is not guaranteed.
 
+## Changelog
+
+### 2026-11 Layout and typography fixes
+
+This repository improves on the upstream project [Lei-Ao/ParallelTranslation](https://github.com/Lei-Ao/ParallelTranslation); the improved version lives at [XIA-2005/ParallelTranslation](https://github.com/XIA-2005/ParallelTranslation). Compared with the original, this round fixes the following layout issues:
+
+1. **Misplaced figure labels**: standalone tick and legend labels near graphics are separated from the prose flow and typeset at their original axis, font size, and baseline instead of displacing body text.
+2. **Lost abstract bold**: a long bold label mixed with regular prose no longer bolds the whole paragraph; truly bold body text keeps its source weight, so abstract headings and prose are distinguished correctly.
+3. **Shrunk short body text**: a paragraph shrunk by a tight local text box can borrow unused source height left by a shorter translation of the next paragraph in the same column, restoring its original size.
+4. **Misaligned author blocks**: authors, affiliations, and emails on the cover page are pre-typeset as one region, keeping affiliation marks as superscripts and emails in a monospaced face instead of drifting downward line by line.
+5. **Lost partial bold in captions and wrapped headings**: bold caption titles after figure/table numbers map to the matching first sentence of the translation, and bold labels spanning wrapped lines (including line-end hyphenation) are recognized continuously without bolding the following regular prose.
+6. **Incomplete hover highlighting**: merged fragments of a source paragraph or equation keep their same-page group membership, so the reader highlights and selects the whole group on both sides instead of only the last few words or one equation line.
+7. **Multiple selection frames around one equation**: a merged equation group draws one bounding frame and tint per side, instead of several small frames or an overly dark overlapping tint.
+8. **Lost subheading italics and uniform bolding**: italic and weight follow the source font flags independently; numbering or heading structure no longer triggers uniform bolding. Chinese text gets synthesized 12° oblique faces from the embeddable font family.
+9. **Headings typeset separately from body**: when the extractor merges a heading into a body block, the layout detects the structural boundary from source line geometry and typesets both parts separately, restoring a standalone centered heading with its own size, weight, italic, and spacing.
+10. **Equation labels move with the equation**: punctuation and labels extracted into the following prose are split off and moved together with the original formula as vector content, keeping the label on the right at its original relative position.
+
+The layout cache version advances from 61 to 66: reopen a document or run "Re-typeset" to apply, with no retranslation needed; saved translations, paragraph IDs, and the source PDF are unchanged. Regression tests cover synthetic single/double-column layouts, various page widths, 0/90/180/270° rotations, and local paper samples; complex regions may still keep the original text with a stated reason.
+
 ## Quick start
 
 ### Windows
@@ -44,7 +63,7 @@ A local-first PDF translation workspace with side-by-side reading, layout-aware 
 4. Afterwards, double-click `start.bat` or **`start.vbs`**. No terminal window stays open: a “页间 Parallel” tray icon appears and the workbench opens at <http://127.0.0.1:8765>.
 
 ```powershell
-git clone https://github.com/Lei-Ao/ParallelTranslation.git
+git clone https://github.com/XIA-2005/ParallelTranslation.git
 cd ParallelTranslation
 .\start.bat
 ```
