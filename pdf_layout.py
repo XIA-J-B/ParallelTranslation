@@ -27,7 +27,7 @@ ET.register_namespace("", "http://www.w3.org/2000/svg")
 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
 PDF_LOCK = threading.RLock()
-ENGINE_VERSION = 63
+ENGINE_VERSION = 64
 MATH_FONT = re.compile(r"math|symbol|cmmi|cmsy|cmex|msam|msbm|stmary|rsfs", re.I)
 # MuPDF justifies by stretching spaces only. CJK prose has few spaces, so one
 # unbreakable Latin/symbol run can turn a single space into a hole several
@@ -712,8 +712,8 @@ def _caption_key(match):
             match['number'].upper())
 
 
-def inline_bold_hints(style, text):
-    """Locate bold run-in labels whose emphasis should survive translation.
+def inline_bold_hints(style, text, emphasis_flag=16):
+    """Locate structural run-in emphasis (PDF flag 16 bold, or 2 italic).
 
     Only structural labels are returned: a leading label, a label after a
     number/bullet, or a caption title. Arbitrary emphasis inside a
@@ -724,6 +724,10 @@ def inline_bold_hints(style, text):
     spans = []
     for line in style.get("lines") or []:
         current = [dict(span) for span in line["spans"] if span["text"].strip()]
+        if emphasis_flag == 2:
+            for span in current:
+                if MATH_FONT.search(span.get('font', '')):
+                    span['flags'] &= ~2
         if spans and current:
             if spans[-1]["text"].endswith('-'):
                 spans[-1]["text"] = spans[-1]["text"][:-1]
@@ -733,7 +737,7 @@ def inline_bold_hints(style, text):
     lines = [{"spans": spans}] if spans else []
     total = sum(len(span["text"].strip()) for line in lines for span in line["spans"] if span["text"].strip())
     bold = sum(len(span["text"].strip()) for line in lines for span in line["spans"]
-               if span["text"].strip() and span["flags"] & 16)
+               if span["text"].strip() and span["flags"] & emphasis_flag)
     if not total or not bold:
         return []
     hints = []
@@ -743,12 +747,12 @@ def inline_bold_hints(style, text):
         before = ""
         index = 0
         while index < len(spans):
-            if not spans[index]["flags"] & 16:
+            if not spans[index]["flags"] & emphasis_flag:
                 before += spans[index]["text"]
                 index += 1
                 continue
             run = []
-            while index < len(spans) and spans[index]["flags"] & 16:
+            while index < len(spans) and spans[index]["flags"] & emphasis_flag:
                 run.append(spans[index])
                 index += 1
             run_text = "".join(span["text"] for span in run).strip()
@@ -785,6 +789,8 @@ def inline_bold_hints(style, text):
                 continue
             if kind != "lead_token" and not terminator:
                 continue
+            if emphasis_flag == 2 and kind == 'lead_token':
+                continue  # A lone italic variable/word is not a structural label.
             hints.append({"kind": kind, "marker": marker[1] if marker else "",
                           "caption": _caption_key(caption) if caption else None,
                           "ordinal": ordinal, "terminator": terminator, "include": include,
@@ -898,18 +904,20 @@ def _text_html(value, fallback):
                    for char in value)
 
 
-def _bold_html(value, start, end, ranges, fallback=()):
-    pieces, position = [], start
-    for first, last in ranges:
-        first, last = max(first, start), min(last, end)
-        if first >= last or last <= position:
-            continue
-        if first > position:
-            pieces.append(_text_html(value[position:first], fallback))
-        pieces.append("<b>" + _text_html(value[first:last], fallback) + "</b>")
-        position = last
-    if position < end:
-        pieces.append(_text_html(value[position:end], fallback))
+def _bold_html(value, start, end, ranges, fallback=(), italic=()):
+    edges = {start, end}
+    for first, last in (*ranges, *italic):
+        if first < end and last > start:
+            edges.update((max(first, start), min(last, end)))
+    edges = sorted(edges)
+    pieces = []
+    for first, last in zip(edges, edges[1:]):
+        text = _text_html(value[first:last], fallback)
+        if any(a <= first and last <= b for a, b in italic):
+            text = '<i>' + text + '</i>'
+        if any(a <= first and last <= b for a, b in ranges):
+            text = '<b>' + text + '</b>'
+        pieces.append(text)
     return "".join(pieces)
 
 
@@ -950,7 +958,7 @@ def list_marker_style(block, style, size):
                      "size": size * ratio, "weight": weight}
 
 
-def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), marker_style=None, links=()):
+def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), marker_style=None, links=(), italic=()):
     marker = lead_list_marker(value) if marker_style is not None else None
     if marker is not None:
         first, last = marker.start(2), marker.end(2)
@@ -970,7 +978,8 @@ def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), ma
             if end > 0 and start < end:
                 shifted.append((max(0, start), end))
         contents, plain, labels, resolved = inline_math_markup(
-            suffix, assets, archive, scale, shifted, fallback, links=links)
+            suffix, assets, archive, scale, shifted, fallback, links=links,
+            italic=[(max(0, a - removed), b - removed) for a, b in italic if b > removed])
         # Resolved ranges address the suffix; map them back behind the marker.
         resolved = [dict(item, start=item["start"] + removed, end=item["end"] + removed)
                     for item in resolved]
@@ -1015,7 +1024,7 @@ def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), ma
     for start, end, kind, payload in events:
         if start < raw_cursor:
             continue
-        pieces.append(_bold_html(value, raw_cursor, start, bold, fallback))
+        pieces.append(_bold_html(value, raw_cursor, start, bold, fallback, italic))
         plain.append(value[raw_cursor:start])
         if kind == "math":
             name = "math-" + hashlib.sha256(payload["svg"]).hexdigest()[:20] + ".svg"
@@ -1026,7 +1035,7 @@ def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), ma
         else:
             # Goto anchors carry no href; the reader overlay navigates, and the
             # markup only marks the text so its rendered position can be found.
-            inner = _bold_html(value, start, end, bold, fallback)
+            inner = _bold_html(value, start, end, bold, fallback, italic)
             if payload.get("color"):
                 # Publishers style links black, blue or gray. Keep that color
                 # instead of MuPDF's default HTML link blue.
@@ -1039,7 +1048,7 @@ def inline_math_markup(value, assets, archive, scale=1, bold=(), fallback=(), ma
             plain.append(value[start:end])
             resolved.append(dict(payload))
         raw_cursor = end
-    pieces.append(_bold_html(value, raw_cursor, len(value), bold, fallback))
+    pieces.append(_bold_html(value, raw_cursor, len(value), bold, fallback, italic))
     plain.append(value[raw_cursor:])
     return "".join(pieces), "".join(plain), labels, resolved
 
@@ -2148,19 +2157,22 @@ def fitted_overlay(overlays, page, block, rect, style, obstacles, typography=Non
     prose_spans = [s for s in style.get('spans', []) if not MATH_FONT.search(s['font'])
                    and re.search(r'[A-Za-z\u3400-\u9fff]{2,}', s['text'])]
     whole_body_bold = bool(prose_spans) and all(s['flags'] & 16 for s in prose_spans)
-    weight = 600 if section_heading(block["text"]) or (style['bold'] and (
-        display_weight or not is_prose(block['text']) or whole_body_bold)) else 400
+    weight = 600 if style['bold'] and (
+        display_weight or not is_prose(block['text']) or whole_body_bold) else 400
     # A caption/run-in title can occupy most of a short block. Its character
     # majority must not make the regular caption number or description bold.
     if bold_hints and not whole_body_bold and not display_weight:
         weight = 400
 
+    whole_italic = style['italic'] and (not prose_spans or all(s['flags'] & 2 for s in prose_spans))
+    italic_hints = inline_bold_hints(style, block['text'], emphasis_flag=2) if not whole_italic else ()
     for variant in variants:
         ranges = bold_ranges(variant, bold_hints) if bold_hints else ()
+        italics = bold_ranges(variant, italic_hints) if italic_hints else ()
         contents, validation_text, math_labels, resolved_links = inline_math_markup(
             variant, block.get("_inline_assets", []), archive, bold=ranges,
             fallback=typography.get("fallback_characters", ""), marker_style=marker_style,
-            links=block.get("_link_hints", []))
+            links=block.get("_link_hints", []), italic=italics)
         anchors = [{"text": item["text"], "kind": item["kind"], "uri": item.get("uri"),
                     "page": item.get("page"), "to": item.get("to"), "source": item.get("source"),
                     "ordinal": item["ordinal"]} for item in resolved_links]
@@ -2172,7 +2184,7 @@ def fitted_overlay(overlays, page, block, rect, style, obstacles, typography=Non
             css = typography["css"] + (f"*{{margin:0;padding:0}} body{{font-family:{typography['family']};font-size:{size}pt;"
                    f"line-height:{line_height};color:#{style['color']:06x};"
                    f"font-weight:{weight};"
-                   f"font-style:{'italic' if style['italic'] else 'normal'};}} b{{font-weight:600}}"
+                   f"font-style:{'italic' if whole_italic else 'normal'};}} b{{font-weight:600}}"
                    " a:link,a:visited,a:hover{color:inherit;text-decoration:none}")
             centered = cover_role in {"title", "authors"} or alignment == "center"
             css += f"body{{text-align:{'center' if centered else alignment};text-indent:{0 if centered else indent}pt}}"
