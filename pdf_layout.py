@@ -27,7 +27,7 @@ ET.register_namespace("", "http://www.w3.org/2000/svg")
 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
 PDF_LOCK = threading.RLock()
-ENGINE_VERSION = 62
+ENGINE_VERSION = 63
 MATH_FONT = re.compile(r"math|symbol|cmmi|cmsy|cmex|msam|msbm|stmary|rsfs", re.I)
 # MuPDF justifies by stretching spaces only. CJK prose has few spaces, so one
 # unbreakable Latin/symbol run can turn a single space into a hole several
@@ -2728,6 +2728,10 @@ def typeset(source: Path, document: dict, target: str, page_numbers=None, typogr
                 if prepared:
                     page.apply_redactions(images=0, graphics=0, text=0)
                 for block, style, result in prepared:
+                    members = block.get("_members", [block["id"]])
+                    if len(members) > 1:
+                        report.setdefault("block_groups", []).append({
+                            "page": saved_page["number"], "blocks": members})
                     if result.get("original") and result["rect"] == result["clip"]:
                         continue
                     box = pymupdf.Rect(result["rect"])
@@ -2886,7 +2890,7 @@ def build_layout(directory: Path, document: dict, target: str):
                     report.setdefault("bibliography", []).extend(details["bibliography"])
                 if details.get("flow"):
                     report.setdefault("flow", []).extend(details["flow"])
-                for field in ("original_placements", "erased_spans", "inline_math"):
+                for field in ("original_placements", "erased_spans", "inline_math", "block_groups"):
                     if details.get(field):
                         report.setdefault(field, []).extend(details[field])
                 if details.get("placed_links"):

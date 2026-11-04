@@ -12,7 +12,7 @@ function reader(){
   const source=pane(),translation=pane();
   elements.set('#source-pane',source);elements.set('#translation-pane',translation);
   elements.set('#sync-scroll',{checked:true});elements.set('#page-select',{value:0});
-  const doc={id:'test',pages:[{blocks:[
+  const doc={id:'test',pages:[{number:1,blocks:[
     {id:'a',bbox:[.08,.1,.48,.2]}, {id:'b',bbox:[.08,.4,.48,.6]},
     {id:'c',bbox:[.08,.7,.48,.8]}, {id:'right',bbox:[.52,.4,.92,.6]}]}]};
   function node(id,owner,top,height=80){
@@ -88,6 +88,38 @@ test('hover is shared, and escape clears selection on both sides',()=>{
   assert.equal(r.eval('state.selected'),null);
   assert.ok(!r.originals.get('b').classes.has('selected'));
   assert.ok(!r.translations.get('b').classes.has('linked-hover'));
+});
+test('hovering any merged source fragment highlights every member on both sides',()=>{
+  const r=reader();
+  r.eval("state.layout={block_groups:[{page:1,blocks:['b','c']},{page:2,blocks:['a','right']}]};hoverBlock('c')");
+  for(const map of [r.originals,r.translations]){
+    assert.ok(map.get('b').classes.has('linked-hover'));
+    assert.ok(map.get('c').classes.has('linked-hover'));
+    assert.ok(!map.get('a').classes.has('linked-hover'));
+    assert.ok(!map.get('right').classes.has('linked-hover'));
+  }
+  r.eval("hoverBlock('b');selectBlock('c','translation')");
+  for(const map of [r.originals,r.translations]){
+    assert.ok(map.get('b').classes.has('selected'));
+    assert.ok(map.get('c').classes.has('selected'));
+    assert.ok(!map.get('right').classes.has('selected'));
+  }
+  r.eval('hoverBlock(null);clearBlockSelection()');
+  for(const map of [r.originals,r.translations])for(const node of map.values()){
+    assert.ok(!node.classes.has('linked-hover'));
+    assert.ok(!node.classes.has('selected'));
+  }
+});
+test('older placement reports keep merged hover without changing independent blocks',()=>{
+  const r=reader();
+  r.eval("state.layout={placements:{b:[.1,.2,.5,.4],c:[.1,.2,.5,.4],right:[.6,.2,.9,.4]}};hoverBlock('c')");
+  assert.ok(r.originals.get('b').classes.has('linked-hover'));
+  assert.ok(!r.originals.get('right').classes.has('linked-hover'));
+  r.eval("state.layout={block_groups:[],placements:{}};hoverBlock('c')");
+  assert.ok(!r.originals.get('b').classes.has('linked-hover'));
+  r.eval("state.view='paragraph';state.layout={block_groups:[{page:1,blocks:['b','c']}]};hoverBlock('c')");
+  assert.ok(!r.originals.get('b').classes.has('linked-hover'));
+  assert.ok(r.translations.get('c').classes.has('linked-hover'));
 });
 test('sync can be disabled, and horizontal scrolling uses each pane range',()=>{
   const r=reader();r.elements.get('#sync-scroll').checked=false;

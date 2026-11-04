@@ -172,7 +172,35 @@ function renderCard(block,index){
   const needsStatus=working || error || !block.translation || block.target!==state.target;
   return `<article class="translation-card ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" id="card-${block.id}" tabindex="0" aria-label="第 ${index+1} 段"><div class="card-meta ${needsStatus?'':'hidden'}"><span class="state ${error?'error':''}">${label}</span></div>${text}${error?`<div class="block-error">${escapeHtml(error)}</div>`:''}<div class="card-actions"><button data-action="translate" data-id="${block.id}">${block.translation?'↻ 重新翻译':'✦ 翻译此段'}</button><button data-action="edit" data-id="${block.id}">编辑译文</button>${block.translation?`<button data-action="copy" data-id="${block.id}">复制</button>`:''}</div></article>`;
 }
-function isBlockSelected(id){return state.selected===id || (state.selected!==null && readingInteraction.selection.has(id));}
+let blockGroupCache={doc:null,layout:null,groups:new Map()};
+function blockGroup(id){
+  if(state.view!=='pdf' || !state.layout)return [id];
+  if(blockGroupCache.doc!==state.doc || blockGroupCache.layout!==state.layout){
+    const groups=new Map();
+    for(const page of state.doc?.pages || []){
+      const ids=new Set(page.blocks.map(block=>block.id));
+      let entries=(state.layout.block_groups || []).filter(group=>group.page===page.number).map(group=>group.blocks);
+      // Older reports already assign all members of one rendered block the
+      // exact same placement. Read these without migrating saved documents.
+      if(!Array.isArray(state.layout.block_groups)){
+        const boxes=new Map();
+        for(const block of page.blocks){
+          const box=state.layout.placements?.[block.id];if(!box)continue;
+          const key=JSON.stringify(box);if(!boxes.has(key))boxes.set(key,[]);
+          boxes.get(key).push(block.id);
+        }
+        entries=[...boxes.values()];
+      }
+      for(const entry of entries){
+        const members=[...new Set(entry.filter(key=>ids.has(key)).flatMap(key=>groups.get(key) || [key]))];
+        for(const key of members)groups.set(key,members);
+      }
+    }
+    blockGroupCache={doc:state.doc,layout:state.layout,groups};
+  }
+  return blockGroupCache.groups.get(id) || [id];
+}
+function isBlockSelected(id){return state.selected!==null && blockGroup(id).some(key=>state.selected===key || readingInteraction.selection.has(key));}
 function pageElements(pane){return pane && pane.querySelectorAll?[...pane.querySelectorAll('.reader-page')]:[];}
 function setPaneScroll(pane,top,left=pane.scrollLeft){
   pane.scrollTop=Math.max(0,top);pane.scrollLeft=left;
@@ -380,9 +408,11 @@ function renderTranslations(){
     }).join('');
     if(!valid){const notice=document.createElement('div');notice.className='layout-notice';notice.textContent=state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'暂显示原文，请点击菜单中的重新排版');pane.prepend(notice);}
     $$('#translation-pane .pdf-page img').forEach(img=>img.addEventListener('error',()=>toast('译文页面加载失败，请点击重新排版或切换段落视图')));
+    applyBlockSelection();hoverBlock(readingInteraction.hovered);
     applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();return;
   }
   pane.innerHTML=state.doc.pages.map((page,pageIndex)=>`<section class="reader-page paragraph-page" data-page-index="${pageIndex}" aria-label="第 ${page.number} 页译文"><div class="page-divider">第 ${page.number} 页</div>${page.blocks.length?page.blocks.map(renderCard).join(''):'<div class="ocr-notice"><strong>这一页没有可提取的文字</strong><br>可能是扫描件、图片页或空白页。第一版暂不包含 OCR，请先用 OCR 工具生成可搜索 PDF 后再导入。其他含文字的页面仍可正常翻译。</div>'}</section>`).join('');
+  applyBlockSelection();hoverBlock(readingInteraction.hovered);
   applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();
 }
 function renderPage(){
@@ -500,9 +530,9 @@ function readerClick(event,side){
   clearBlockSelection();
 }
 function hoverBlock(id){
-  if(readingInteraction.hovered===id)return;
   readingInteraction.hovered=id;
-  $$('[data-block]').forEach(el=>el.classList.toggle('linked-hover',Boolean(id) && el.dataset.block===id));
+  const members=new Set(id?blockGroup(id):[]);
+  $$('[data-block]').forEach(el=>el.classList.toggle('linked-hover',members.has(el.dataset.block)));
 }
 function syncAnchors(index){
   const sourcePane=$('#source-pane'),translationPane=$('#translation-pane');
