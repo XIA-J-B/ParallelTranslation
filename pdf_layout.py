@@ -27,7 +27,7 @@ ET.register_namespace("", "http://www.w3.org/2000/svg")
 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
 PDF_LOCK = threading.RLock()
-ENGINE_VERSION = 61
+ENGINE_VERSION = 62
 MATH_FONT = re.compile(r"math|symbol|cmmi|cmsy|cmex|msam|msbm|stmary|rsfs", re.I)
 # MuPDF justifies by stretching spaces only. CJK prose has few spaces, so one
 # unbreakable Latin/symbol run can turn a single space into a hole several
@@ -701,20 +701,40 @@ def anchor_overlay_rects(page, anchors):
 
 
 BOLD_MARKER = re.compile(r"(Q\d+[\).]|(?<!\d)\d{1,2}[\).]|(?<![A-Za-z])[A-Za-z][\).]|[•·●▪◆])\s*$")
+CAPTION_PREFIX = re.compile(
+    r"^\s*(?P<kind>table|tab\.?|figure|fig\.?|表|图)\s*"
+    r"(?P<number>\d+|[IVXLCDM]+)\s*[:：.。]?\s*", re.I)
+
+
+def _caption_key(match):
+    kind = match['kind'].lower()
+    return ('table' if kind in {'table', 'tab', 'tab.', '表'} else 'figure',
+            match['number'].upper())
 
 
 def inline_bold_hints(style, text):
     """Locate bold run-in labels whose emphasis should survive translation.
 
     Only structural labels are returned: a leading label, a label after a
-    number/bullet, or a leading caption word. Arbitrary emphasis inside a
+    number/bullet, or a caption title. Arbitrary emphasis inside a
     sentence cannot be aligned across languages and is left untouched.
     """
-    lines = style.get("lines") or []
+    # A PDF line break is not an emphasis boundary. Keep adjacent bold spans
+    # together across wrapped titles, including words hyphenated by the PDF.
+    spans = []
+    for line in style.get("lines") or []:
+        current = [dict(span) for span in line["spans"] if span["text"].strip()]
+        if spans and current:
+            if spans[-1]["text"].endswith('-'):
+                spans[-1]["text"] = spans[-1]["text"][:-1]
+            else:
+                spans[-1]["text"] += ' '
+        spans.extend(current)
+    lines = [{"spans": spans}] if spans else []
     total = sum(len(span["text"].strip()) for line in lines for span in line["spans"] if span["text"].strip())
     bold = sum(len(span["text"].strip()) for line in lines for span in line["spans"]
                if span["text"].strip() and span["flags"] & 16)
-    if not total or not bold or bold > total * .55:
+    if not total or not bold:
         return []
     hints = []
     history = ""
@@ -751,8 +771,11 @@ def inline_bold_hints(style, text):
             elif after[:1] in "—–":
                 terminator, include = "dash", False
             marker = BOLD_MARKER.search(prefix)
+            caption = CAPTION_PREFIX.fullmatch(prefix)
             single_word = len(run_text) <= 20 and not re.search(r"\s", run_text)
-            if marker:
+            if caption:
+                kind = "caption"
+            elif marker:
                 kind = "marker"
             elif line_index == 0 and not prefix and not terminator and single_word:
                 kind = "lead_token"
@@ -763,6 +786,7 @@ def inline_bold_hints(style, text):
             if kind != "lead_token" and not terminator:
                 continue
             hints.append({"kind": kind, "marker": marker[1] if marker else "",
+                          "caption": _caption_key(caption) if caption else None,
                           "ordinal": ordinal, "terminator": terminator, "include": include,
                           "limit": max(16, min(120, len(run_text) * 2 + 12))})
         history += "".join(span["text"] for span in spans)
@@ -822,7 +846,15 @@ def bold_ranges(text, hints):
     """Map source bold label hints to character ranges in the translation."""
     ranges = []
     for hint in hints:
-        if hint["kind"] == "lead":
+        if hint["kind"] == "caption":
+            caption = CAPTION_PREFIX.match(text)
+            if not caption or _caption_key(caption) != tuple(hint['caption']):
+                continue
+            start = caption.end()
+            end = _bold_end(text, start, hint["terminator"], hint["include"], hint["limit"])
+            if end:
+                ranges.append((start, end))
+        elif hint["kind"] == "lead":
             start = len(text) - len(text.lstrip())
             end = _bold_end(text, start, hint["terminator"], hint["include"], hint["limit"])
             if end:
@@ -2118,6 +2150,10 @@ def fitted_overlay(overlays, page, block, rect, style, obstacles, typography=Non
     whole_body_bold = bool(prose_spans) and all(s['flags'] & 16 for s in prose_spans)
     weight = 600 if section_heading(block["text"]) or (style['bold'] and (
         display_weight or not is_prose(block['text']) or whole_body_bold)) else 400
+    # A caption/run-in title can occupy most of a short block. Its character
+    # majority must not make the regular caption number or description bold.
+    if bold_hints and not whole_body_bold and not display_weight:
+        weight = 400
 
     for variant in variants:
         ranges = bold_ranges(variant, bold_hints) if bold_hints else ()
