@@ -27,7 +27,7 @@ ET.register_namespace("", "http://www.w3.org/2000/svg")
 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
 PDF_LOCK = threading.RLock()
-ENGINE_VERSION = 64
+ENGINE_VERSION = 66
 MATH_FONT = re.compile(r"math|symbol|cmmi|cmsy|cmex|msam|msbm|stmary|rsfs", re.I)
 # MuPDF justifies by stretching spaces only. CJK prose has few spaces, so one
 # unbreakable Latin/symbol run can turn a single space into a hole several
@@ -1568,22 +1568,45 @@ def layout_blocks(page, saved_page, native, target, cover_page=False):
         block = original
         if block.get("drop_cap"):
             block = {**block, "_members": [block["id"]]}
-        # Equation numbers are sometimes extracted into the following paragraph.
-        # Leave those labels on the source page and typeset only the explanation.
-        if re.match(r"^\s*\(\d+\)\s*\n", block["text"]) and is_prose(block["text"]):
+        # Equation punctuation and a number can belong to the following prose
+        # extraction block. Detach that prefix without altering the saved ID or
+        # translation; its original glyphs travel with the display equation.
+        prefix = re.match(r"^\s*[,;:.，；：。]*\s*\((\d+)\)\s*\n", block['text'])
+        if prefix and is_prose(block['text'][prefix.end():]):
             rect = source_rect(page, block)
-            best = max(native, key=lambda b: overlap(rect, pymupdf.Rect(b["bbox"])), default=None)
-            lines = [line for line in best["lines"] if not re.fullmatch(r"\s*\(\d+\)\s*", "".join(s["text"] for s in line["spans"]))] if best else []
-            if lines:
-                region = pymupdf.Rect(lines[0]["bbox"])
-                for line in lines[1:]:
+            lines = _flow_lines(native, rect)
+            label_lines = [line for line in lines
+                           if re.fullmatch(r'\s*\(' + re.escape(prefix[1]) + r'\)\s*',
+                                           ''.join(s['text'] for s in line['spans']))]
+            body_text = block['text'][prefix.end():].strip()
+            needle = normalized_text(body_text.splitlines()[0])[:20]
+            first = next((line for line in lines if normalized_text(
+                ''.join(s['text'] for s in line['spans'])).startswith(needle)), None)
+            if first and label_lines and first['bbox'][1] > label_lines[0]['bbox'][1]:
+                body_lines = [line for line in lines if line['bbox'][1] >= first['bbox'][1] - .1]
+                region = pymupdf.Rect(body_lines[0]['bbox'])
+                for line in body_lines[1:]:
                     region |= pymupdf.Rect(line["bbox"])
+                retained = pymupdf.Rect(label_lines[0]['bbox'])
+                for line in lines:
+                    value = ''.join(s['text'] for s in line['spans']).strip()
+                    if line['bbox'][1] < first['bbox'][1] and re.fullmatch(r'[,;:.，；：。]+', value):
+                        retained |= pymupdf.Rect(line['bbox'])
                 displayed = region * page.rotation_matrix
                 bounds = page.rect
-                block = {**block, "text": re.sub(r"^\s*\(\d+\)\s*\n", "", block["text"]),
-                         "translation": re.sub(r"^\s*[（(]\d+[）)]\s*", "", block["translation"]),
+                translated_prefix = re.match(r'^\s*[,;:.，；：。]*\s*[（(](\d+)[）)]\s*', block['translation'])
+                if translated_prefix and translated_prefix[1] != prefix[1]:
+                    blocks.append({**block, '_structure_issue': '公式编号与原文不一致，保留完整原文，请核对译文编号'})
+                    continue
+                block = {**block, "text": body_text,
+                         "translation": block['translation'][translated_prefix.end():] if translated_prefix else block['translation'],
                          "bbox": [displayed.x0 / bounds.width, displayed.y0 / bounds.height,
-                                  displayed.x1 / bounds.width, displayed.y1 / bounds.height]}
+                                  displayed.x1 / bounds.width, displayed.y1 / bounds.height],
+                         '_equation_prefix': {'id': block['id'] + '-equation-prefix',
+                                              'text': '(' + prefix[1] + ')', '_math_fragment': True,
+                                              '_members': [], 'rect': list(retained)}}
+            else:
+                block = {**block, '_structure_issue': '无法可靠分离公式编号与说明段落，保留完整原文'}
         blocks.append(block)
     rects = [source_rect(page, b) for b in blocks]
     remaining = set(range(len(blocks)))
@@ -2030,8 +2053,96 @@ def stretched_gap(page, size):
     return False
 
 
+_SECTION_NUMBER = re.compile(r'^\s*([IVXLCDM]+|[A-Z]|\d+(?:\.\d+)*)(?:[.．、:：]\s*|\s+)')
+
+
+def mixed_heading_parts(block, style):
+    """Identify a standalone heading inside a prose extraction block.
+
+    Native line geometry proves the source boundary; an explicit matching
+    translated heading line proves the target boundary. Never guess a split
+    inside a translated sentence or infer emphasis from the section number.
+    """
+    lines = style.get('lines', [])
+    if len(lines) < 2:
+        return None
+    source = block.get('text', '').strip().splitlines()
+    if len(source) < 2 or not section_heading(source[0]) or not is_prose('\n'.join(source[1:])):
+        return None
+    head_text = ''.join(s['text'] for s in lines[0]['spans']).strip()
+    if normalized_text(head_text) != normalized_text(source[0]):
+        return None
+    head = pymupdf.Rect(lines[0]['bbox'])
+    body = pymupdf.Rect(lines[1]['bbox'])
+    for line in lines[2:]:
+        body |= pymupdf.Rect(line['bbox'])
+    size = style['size']
+    centered = (abs((head.x0 + head.x1 - body.x0 - body.x1) / 2) <= max(3, size * .4, body.width * .08)
+                and head.width < body.width * .88)
+    head_flags = {s['flags'] & 18 for s in lines[0]['spans'] if s['text'].strip()}
+    body_flags = {s['flags'] & 18 for line in lines[1:] for s in line['spans'] if s['text'].strip()}
+    distinct = head_flags != body_flags or abs(_flow_size(lines[:1]) - _flow_size(lines[1:])) > size * .1
+    if not ((centered or distinct) and body.y0 - head.y1 > size * .04):
+        return None
+    translated = block.get('translation', '').strip().splitlines()
+    first = _SECTION_NUMBER.match(source[0])
+    second = _SECTION_NUMBER.match(translated[0]) if translated else None
+    if (len(translated) < 2 or not first or not second or first[1] != second[1]
+            or len(translated[0]) > 120 or not '\n'.join(translated[1:]).strip()):
+        return '已识别块内标题，但译文缺少可可靠匹配的标题换行，保留完整原文；请将标题与正文分行'
+    return [(source[0], translated[0], lines[:1], head, 'center' if centered else None),
+            ('\n'.join(source[1:]), '\n'.join(translated[1:]), lines[1:], body, None)]
+
+
+def mixed_heading_overlay(overlays, page, block, parts, style, obstacles, typography, horizontal_obstacles):
+    """Typeset heading and body separately, committing one atomic replacement."""
+    base = len(overlays)
+    results = []
+    for text, translation, lines, rect, alignment in parts:
+        native = {'bbox': list(rect), 'lines': lines}
+        part_style, reason = inspect_block([native], rect)
+        part = {**block, 'text': text, 'translation': translation, '_structured_part': True,
+                '_alignment_override': alignment}
+        result = (fitted_overlay(overlays, page, part, rect, part_style, obstacles, typography,
+                                 horizontal_obstacles, bold_hints=inline_bold_hints(part_style, text))
+                  if not reason else None)
+        if result is None:
+            if len(overlays) > base:
+                overlays.delete_pages(base, len(overlays) - 1)
+            style['_layout_failure_reason'] = '块内标题与正文无法分别安全排印，保留完整原文；请核对标题换行与译文长度'
+            return None
+        results.append(result)
+    region = pymupdf.Rect(results[0]['rect'])
+    for result in results[1:]:
+        region |= pymupdf.Rect(result['rect'])
+    with pymupdf.open() as combined:
+        canvas = combined.new_page(width=page.rect.width, height=page.rect.height)
+        for result in results:
+            canvas.show_pdf_page(pymupdf.Rect(result['rect']), overlays, result['overlay'],
+                                 clip=pymupdf.Rect(result['clip']))
+        overlays.insert_pdf(combined)
+    overlays.delete_pages(base, len(overlays) - 2)
+    result = {'overlay': base, 'rect': list(region), 'clip': list(region),
+              'scale': min(r['scale'] for r in results),
+              'math_labels': [label for r in results for label in r.get('math_labels', [])],
+              'structure': [{'kind': kind, 'source': list(part[3]), 'rect': r['rect']}
+                            for kind, part, r in zip(('heading', 'body'), parts, results)]}
+    for field in ('links', 'whole_links'):
+        if any(r.get(field) for r in results):
+            result[field] = [item for r in results for item in r.get(field, [])]
+    return result
+
+
 def fitted_overlay(overlays, page, block, rect, style, obstacles, typography=None,
                    horizontal_obstacles=None, bold_hints=None):
+    if not block.get('_structured_part'):
+        mixed = mixed_heading_parts(block, style)
+        if mixed is not None:
+            if isinstance(mixed, str):
+                style['_layout_failure_reason'] = mixed
+                return None
+            return mixed_heading_overlay(overlays, page, block, mixed, style, obstacles,
+                                         typography, horizontal_obstacles)
     if block.get("translation"):
         block = {**block, "translation": soft_translation(block)}
     typography = typography or font_resources(block["translation"])
@@ -2041,6 +2152,8 @@ def fitted_overlay(overlays, page, block, rect, style, obstacles, typography=Non
     math_labels = []
     alignment, indent, source_leading = source_paragraph_style(
         style, rect, block["text"], page.rect.width, horizontal_obstacles, obstacles)
+    if block.get('_alignment_override'):
+        alignment, indent = block['_alignment_override'], 0
     if block.get("drop_cap"):
         indent = 0
     cover_role = cover_text_role(block, page, rect, style)
@@ -2490,6 +2603,12 @@ def typeset(source: Path, document: dict, target: str, page_numbers=None, typogr
             has_redactions = any(a.type[0] == pymupdf.PDF_ANNOT_REDACT for a in (page.annots() or []))
             prepared = []
             formula_candidates = []
+            if not has_redactions:
+                formula_candidates.extend((b['_equation_prefix'], pymupdf.Rect(b['_equation_prefix']['rect']))
+                                          for b in working if b.get('_equation_prefix'))
+                for b in working:
+                    if b.get('_equation_prefix'):
+                        report.setdefault('source_placements', {})[b['id']] = b['bbox']
             table_blocks = 0
             dropped_links = 0
             fallback_ids = set()
@@ -2578,6 +2697,8 @@ def typeset(source: Path, document: dict, target: str, page_numbers=None, typogr
                         continue
                     rect = rects[block["id"]]
                     style, reason = inspect_block(native, rect, combine="_members" in block)
+                    if block.get('_structure_issue'):
+                        reason = block['_structure_issue']
                     if block.get("drop_cap_preserve"):
                         reason = block["drop_cap_preserve"]
                     if block.get("drop_cap_review"):
@@ -2642,7 +2763,7 @@ def typeset(source: Path, document: dict, target: str, page_numbers=None, typogr
                                 1 for hint in hints if hint["kind"] == "uri"
                                 and ("uri", hint.get("uri") or None) not in kept)
                         if result is None:
-                            reason = "译文超出可用空间或含无法可靠排印的字符，保留原文；请编辑后重新排版"
+                            reason = style.get('_layout_failure_reason') or "译文超出可用空间或含无法可靠排印的字符，保留原文；请编辑后重新排版"
                     if reason and reason.startswith("公式") and not has_redactions and not is_prose(block["text"]):
                         formula_candidates.append((block, rect))
                     if reason:
@@ -2741,6 +2862,17 @@ def typeset(source: Path, document: dict, target: str, page_numbers=None, typogr
                     page.apply_redactions(images=0, graphics=0, text=0)
                 for block, style, result in prepared:
                     members = block.get("_members", [block["id"]])
+                    if block.get('_detached_label'):
+                        source_box = pymupdf.Rect(result['clip']) * pymupdf.Matrix(rotation)
+                        bounds = page.rect * pymupdf.Matrix(rotation)
+                        # Rect * rotation around the origin may be negative;
+                        # normalize relative to those displayed page bounds.
+                        source_box = [(source_box.x0 - bounds.x0) / bounds.width,
+                                      (source_box.y0 - bounds.y0) / bounds.height,
+                                      (source_box.x1 - bounds.x0) / bounds.width,
+                                      (source_box.y1 - bounds.y0) / bounds.height]
+                        for key in members:
+                            report.setdefault('source_placements', {})[key] = source_box
                     if len(members) > 1:
                         report.setdefault("block_groups", []).append({
                             "page": saved_page["number"], "blocks": members})
@@ -2898,6 +3030,8 @@ def build_layout(directory: Path, document: dict, target: str):
                     report[field] += details[field]
                 report["issues"].extend(details["issues"])
                 report["placements"].update(details["placements"])
+                if details.get('source_placements'):
+                    report.setdefault('source_placements', {}).update(details['source_placements'])
                 if details.get("bibliography"):
                     report.setdefault("bibliography", []).extend(details["bibliography"])
                 if details.get("flow"):

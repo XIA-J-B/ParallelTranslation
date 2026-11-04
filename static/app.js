@@ -201,6 +201,7 @@ function blockGroup(id){
   return blockGroupCache.groups.get(id) || [id];
 }
 function isBlockSelected(id){return state.selected!==null && blockGroup(id).some(key=>state.selected===key || readingInteraction.selection.has(key));}
+function sourceBlockBounds(block){return state.view==='pdf'?(state.layout?.source_placements?.[block.id] || block.bbox):block.bbox;}
 function groupHighlightHtml(page,side){
   const seen=new Set(),html=[];
   for(const block of page.blocks){
@@ -208,7 +209,7 @@ function groupHighlightHtml(page,side){
     if(members.length<2 || seen.has(key))continue;
     seen.add(key);
     const boxes=page.blocks.filter(item=>members.includes(item.id)).map(item=>
-      side==='translation'?(state.layout?.placements?.[item.id] || item.bbox):item.bbox);
+      side==='translation'?(state.layout?.placements?.[item.id] || item.bbox):sourceBlockBounds(item));
     const x0=Math.min(...boxes.map(box=>box[0])),y0=Math.min(...boxes.map(box=>box[1]));
     const x1=Math.max(...boxes.map(box=>box[2])),y1=Math.max(...boxes.map(box=>box[3]));
     html.push(`<span class="block-group-highlight" data-block-group="${escapeHtml(key)}" aria-hidden="true" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></span>`);
@@ -224,6 +225,11 @@ function refreshGroupHighlights(){
     element.querySelectorAll('.block-group-highlight').forEach(frame=>frame.remove());
     element.querySelectorAll('.block-overlay').forEach(item=>
       item.classList.toggle('group-member',blockGroup(item.dataset.block).length>1));
+    if(side==='source')for(const item of element.querySelectorAll('.block-overlay')){
+      const block=page.blocks.find(block=>block.id===item.dataset.block);if(!block)continue;
+      const [x0,y0,x1,y1]=sourceBlockBounds(block);
+      Object.assign(item.style,{left:`${x0*100}%`,top:`${y0*100}%`,width:`${(x1-x0)*100}%`,height:`${(y1-y0)*100}%`});
+    }
     element.insertAdjacentHTML('beforeend',groupHighlightHtml(page,side));
   }
 }

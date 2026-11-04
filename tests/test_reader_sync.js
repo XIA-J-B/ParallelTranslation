@@ -168,3 +168,11 @@ test('sync can be disabled, and horizontal scrolling uses each pane range',()=>{
   r.source.scrollWidth=1000;r.translation.scrollWidth=1500;r.source.scrollLeft=100;
   r.eval("synchronize('source')");assert.equal(r.translation.scrollLeft,200);
 });
+test('source hit regions follow a detached equation label while paragraph view keeps saved bounds',()=>{
+  const r=reader();
+  r.eval("state.layout={source_placements:{b:[.1,.3,.5,.6]}};");
+  assert.equal(r.eval("JSON.stringify(sourceBlockBounds(state.doc.pages[0].blocks[1]))"),'[0.1,0.3,0.5,0.6]');
+  assert.equal(r.eval("JSON.stringify(state.doc.pages[0].blocks[1].bbox)"),'[0.08,0.4,0.48,0.6]');
+  r.eval("state.view='paragraph'");
+  assert.equal(r.eval("JSON.stringify(sourceBlockBounds(state.doc.pages[0].blocks[1]))"),'[0.08,0.4,0.48,0.6]');
+});

@@ -160,7 +160,9 @@ def original_formula_units(page, overlays, candidates, native, graphics, lanes=(
                     vector_page.clean_contents()
                 overlays.insert_pdf(vector_source, links=False, annots=False)
         block = {**members[0], "text": " ".join(member["text"] for member in members),
-                 "_members": [member["id"] for member in members], "_formula": True}
+                 "_members": [key for member in members for key in member.get('_members', [member['id']])],
+                 '_detached_label': any(member.get('_members') == [] for member in members),
+                 "_formula": True}
         style = {"spans": owned, "size": max(8, min(12, max(span["size"] for span in owned))), "lines": []}
         result = {"overlay": snapshot, "rect": list(crop), "clip": list(crop), "scale": 1,
                   "original": True, "carried_graphics": carried}
