@@ -36,6 +36,16 @@ A local-first PDF translation workspace with side-by-side reading, layout-aware 
 
 ## Changelog
 
+### 2026-11-06 Multimodal reading, contextual citations and local notes
+
+- Analyze the complete original text, outline and all page images together using one multimodal model, with page-preparation progress and up to four rounds of targeted inspection.
+- Add a dedicated citation workflow that reads complete paragraphs, nearby context and cross-referenced definitions, with original and translated PDF version mapping.
+- Save complete answers and source snapshots as independent local notes, with Markdown export, individual answer deletion and conversation clearing.
+- Standardize article-style responses and math formatting. Preserve LaTeX escapes through Markdown parsing to fix red formula-rendering errors.
+- Support direct reading, original/translation view switching, multi-selection citations, local highlights and responsive reading panels.
+
+Validation covers 277 Python tests, 73 JavaScript tests and browser regressions, plus isolated copies of three stored documents from two real papers totaling 36 pages. Real samples mainly use two columns. Synthetic tests cover single-column pages, scanned pages, varying sizes and all four rotations. Model-flow tests use simulated responses. Real multimodal understanding and adherence to the new output rules still require evaluation. See the detailed reading documentation. [Reading guide in Chinese](docs/skill-reading.zh-CN.md)
+
 ### 2026-11 Layout and typography fixes
 
 This repository improves on the upstream project [Lei-Ao/ParallelTranslation](https://github.com/Lei-Ao/ParallelTranslation); the improved version lives at [XIA-2005/ParallelTranslation](https://github.com/XIA-2005/ParallelTranslation). Compared with the original, this round fixes the following layout issues:

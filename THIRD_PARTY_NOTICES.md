@@ -36,3 +36,12 @@ No system font files are redistributed in this repository. The app may read loca
 Input PDFs, their content, translations, and third-party AI services are not licensed by this notice. This archive does not include personal papers, translations, credentials, or local development screenshots.
 
 输入 PDF、文档内容、译文及第三方 AI 服务不因本说明而获得授权。源码包不包含私人论文、译文、密钥或本机开发截图。
+
+## Bundled paper-reading Skill and browser renderers
+
+- `skills/paper-reading-guide`: paper-reading-guide by 拂晓 (fu xiao), Copyright (c) 2026, MIT. Imported from the user's local upstream archive; original files and license are preserved. `UPSTREAM.json` records source and SHA-256 hashes; no unverifiable commit is claimed. Source: https://github.com/fuxiao13/paper-reading-guide
+- `static/vendor/marked.js`: marked 15.0.12, MIT; license in `static/vendor/marked-LICENSE`. Source: https://github.com/markedjs/marked
+- `static/vendor/purify.js`: DOMPurify 3.2.6, Apache-2.0 OR MPL-2.0; upstream notice in `static/vendor/purify-LICENSE`. Source: https://github.com/cure53/DOMPurify
+- `static/vendor/katex`: KaTeX 0.16.22 (including its packaged math fonts), MIT; upstream license in that directory. Source: https://github.com/KaTeX/KaTeX
+
+These browser assets are served locally; rendering reading responses does not load a public CDN. The earlier statement about not redistributing system fonts does not exclude KaTeX's bundled mathematical fonts.

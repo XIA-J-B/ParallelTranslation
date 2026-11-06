@@ -11,6 +11,7 @@ state.batchSupported=false;
 state.pendingOpen=false;
 state.preparing=false;
 state.openMessage='';
+state.editTranslation=false;
 let toastTimer, editBlock;
 const pendingPaneScrolls=new WeakMap();
 const readingInteraction={side:'source',lane:.25,hovered:null,anchor:null,selection:new Set()};
@@ -48,7 +49,7 @@ async function generateLayout(){
     if(request===layoutRequest){state.layoutBusy=false;updateLayoutControls();if(state.view==='pdf' && state.doc?.id===id && !state.pendingOpen)renderTranslations();}
   }
 }
-function showEdit(block){editBlock=block;$('#edit-source').textContent=block.text;$('#edit-text').value=block.translation;$('#edit-dialog').showModal();}
+function showEdit(block){if(!state.editTranslation || !block)return;editBlock=block;$('#edit-source').textContent=block.text;$('#edit-text').value=block.translation;$('#edit-dialog').showModal();}
 const escapeHtml = (str) => String(str).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const URL_TEXT=/https?:\/\/[^\s<>"'，。；：！？）】」』《【〕]+/g;
 const URL_TRAILING=/[.,;:!?)\]}'"。、；，！？）：」』）》]+$/;
@@ -130,7 +131,7 @@ function updateControls(){
 }
 function renderLibrary(){
   $('#library-count').textContent=state.library.length;
-  $('#library').innerHTML=state.library.length?state.library.map(doc=>`<button class="library-item ${state.doc?.id===doc.id?'active':''}" data-doc="${doc.id}" title="${escapeHtml(doc.name)}" aria-label="打开 ${escapeHtml(doc.name)}"><span class="doc-symbol">▤</span><div><strong>${escapeHtml(doc.name)}</strong><small>${doc.pages} 页 · ${doc.translated} 段已有译文</small></div></button>`).join(''):'<p class="library-empty">导入第一份文档，<br>开始跨越语言的阅读。</p>';
+  $('#library').innerHTML=state.library.length?state.library.map(doc=>`<button class="library-item ${state.doc?.id===doc.id?'active':''}" data-doc="${doc.id}" title="${escapeHtml(doc.name)}" aria-label="打开 ${escapeHtml(doc.name)}"><span class="doc-symbol">▤</span><div><strong>${escapeHtml(doc.name)}</strong><small>${doc.pages} 页 · ${doc.translated} 段已有译文</small></div></button><button class="library-read" data-read-doc="${doc.id}" aria-label="直接阅读 ${escapeHtml(doc.name)}">直接阅读</button>`).join(''):'<p class="library-empty">导入第一份文档，<br>开始跨越语言的阅读。</p>';
   updateControls();
 }
 async function refreshLibrary(){state.library=await api('/api/documents');renderLibrary();}
@@ -144,7 +145,7 @@ function renderDocument(ready=false){
   $('#page-select').innerHTML=state.doc.pages.map((page,i)=>`<option value="${i}">${page.number}</option>`).join('');
   $('#page-total').textContent=`/ ${state.doc.pages.length}`;
   $('#export').href=`/api/documents/${state.doc.id}/export`;
-  if(!ready)invalidateLayout();renderPage();renderLibrary();status('准备就绪 · 单击同步选中，点击空白取消 · Shift 连选');if(!ready)refreshLayout();
+  if(!ready)invalidateLayout();renderPage();renderLibrary();status('准备就绪 · 单击同步选中，点击空白取消 · Shift 连选');if(!ready)refreshLayout();globalThis.PaperAssistant?.documentChanged();
 }
 const SOFT_LIST_LINE=/^\s*(?:[•·●▪▫◦‣∙⋅※■□◆◇]|\(?\d{1,2}[.)]|[A-Za-z][.)])\s+/m;
 function proseSource(text){
@@ -261,7 +262,8 @@ function paneContentWidth(pane){
 }
 function fitReaderZoom(){
   const widest=Math.max(...state.doc.pages.map(page=>page.width));
-  const available=pdfPanes().map(paneContentWidth);
+  const available=pdfPanes().filter(pane=>pane.clientWidth>0).map(paneContentWidth);
+  if(!available.length)return readerViewport.zoom;
   return Math.max(MIN_READER_ZOOM,Math.min(MAX_READER_ZOOM,Math.min(...available)/(widest*PDF_CSS_SCALE)));
 }
 function updateZoomControls(){
@@ -274,7 +276,7 @@ function updateZoomControls(){
   $('#zoom-hint').textContent=enabled?'同步缩放 · Ctrl＋滚轮':'段落视图 · 切回 PDF 可缩放';
 }
 function applyViewportGeometry(){
-  if(!state.doc || !$('#source-pane').clientWidth)return;
+  if(!state.doc || !pdfPanes().some(pane=>pane.clientWidth>0))return;
   if(readerViewport.documentId!==state.doc.id){
     readerViewport.documentId=state.doc.id;readerViewport.fit=true;
     for(const pane of pdfPanes())pane.scrollLeft=0;
@@ -295,7 +297,7 @@ function applyViewportGeometry(){
     if(stack)stack.style.width=`${Math.max(available,...state.doc.pages.map(page=>page.width*PDF_CSS_SCALE*readerViewport.zoom))}px`;
     pane.classList.toggle('can-pan',pane.scrollWidth>pane.clientWidth+1);
   }
-  updateZoomControls();scheduleReaderImages();
+  updateZoomControls();scheduleReaderImages();globalThis.OriginalTextSelection?.refresh();
 }
 function captureViewportAnchor(pane,clientX,clientY){
   const pages=pageElements(pane);if(!pages.length)return null;
@@ -430,22 +432,24 @@ function renderTranslations(){
   if(!state.doc){pane.innerHTML='';return;}
   const top=pane.scrollTop, left=pane.scrollLeft, position=panePosition(pane);
   pane.classList.toggle('pdf-mode',state.view==='pdf');
+  pane.classList.toggle('translation-editing',state.editTranslation);
   pane.classList.toggle('pages-stack',state.view==='pdf');
   if(state.view==='pdf'){
     const valid=Boolean(state.layout);
     pane.innerHTML=state.doc.pages.map((page,pageIndex)=>{
       const image=valid?`/api/documents/${state.doc.id}/layout/${state.layout.revision}/pages/${page.number}.png`:`/api/documents/${state.doc.id}/pages/${page.number}.png`;
       const pageLinks=valid?layoutLinksForPage(page.number):page.links;
-      return `<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" src="${image}" alt="第 ${page.number} 页${valid?'译文':'原文占位'}" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=valid?(state.layout.placements[block.id] || block.bbox):block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文，双击编辑" title="单击同步选中，双击编辑译文" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${linkOverlays(pageLinks)}</div>`;
+      return `<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" src="${image}" alt="第 ${page.number} 页${valid?'译文':'原文占位'}" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=valid?(state.layout.placements[block.id] || block.bbox):block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文${state.editTranslation?'，双击编辑':''}" title="${state.editTranslation?'单击同步选中，双击编辑译文':'拖动选择文字，可解释、引用和高亮'}" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${linkOverlays(pageLinks)}</div>`;
     }).join('');
-    if(!valid){const notice=document.createElement('div');notice.className='layout-notice';notice.textContent=state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'暂显示原文，请点击菜单中的重新排版');pane.prepend(notice);}
+    const untranslated=blocks().filter(block=>!isTranslated(block)).length;
+    if(!valid || untranslated){const notice=document.createElement('div');notice.className='layout-notice';notice.textContent=valid?`还有 ${untranslated} 段未译，未译区域保留原文；可选中段落精读或从菜单开始翻译。`:state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'未译区域显示原文；可选中段落精读，或从菜单开始翻译');pane.prepend(notice);}
     $$('#translation-pane .pdf-page img').forEach(img=>img.addEventListener('error',()=>toast('译文页面加载失败，请点击重新排版或切换段落视图')));
     refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
-    applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();return;
+    applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();globalThis.OriginalTextSelection?.refresh();return;
   }
   pane.innerHTML=state.doc.pages.map((page,pageIndex)=>`<section class="reader-page paragraph-page" data-page-index="${pageIndex}" aria-label="第 ${page.number} 页译文"><div class="page-divider">第 ${page.number} 页</div>${page.blocks.length?page.blocks.map(renderCard).join(''):'<div class="ocr-notice"><strong>这一页没有可提取的文字</strong><br>可能是扫描件、图片页或空白页。第一版暂不包含 OCR，请先用 OCR 工具生成可搜索 PDF 后再导入。其他含文字的页面仍可正常翻译。</div>'}</section>`).join('');
   refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
-  applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();
+  applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();globalThis.OriginalTextSelection?.refresh();
 }
 function renderPage(){
   if(!state.doc)return;
@@ -467,6 +471,7 @@ function updateOpenProgress(count,total){
   $('#drop-zone').classList.toggle('hidden',visible);
   $('#home-target').disabled=state.running || state.preparing || state.uploading || state.loading;
   $('#home-context').disabled=state.running || state.preparing;
+  if($('#read-direct'))$('#read-direct').disabled=!state.doc || state.loading || state.uploading || state.preparing || state.running;
   if(!visible)return;
   const percent=total && !state.uploading && !state.loading?Math.floor(count/total*100):0;
   $('#open-name').textContent=state.uploading?'正在导入 PDF…':state.loading?'正在读取 PDF…':state.doc?.name || '';
@@ -492,13 +497,13 @@ async function prepareDocument(){
   }catch(error){state.openMessage=`处理失败：${error.message}。可重试，已完成的译文会保留。`;toast(error.message);}
   finally{state.preparing=false;updateControls();}
 }
-async function openDocument(id){
+async function openDocument(id,direct=false){
   if(state.running || state.uploading || state.loading || state.preparing)return;
   state.pendingOpen=false;state.loading=true;showLibrary();updateControls();
   try{state.doc=await api(`/api/documents/${id}`);state.page=0;state.selected=null;state.errors={};state.pendingOpen=true;invalidateLayout();}
   catch(error){toast(error.message);}
   finally{state.loading=false;updateControls();}
-  await prepareDocument();
+  if(direct && state.pendingOpen){state.pendingOpen=false;renderDocument();}else await prepareDocument();
 }
 async function uploadFile(file){
   if(!file || state.running || state.uploading || state.loading || state.preparing)return;
@@ -507,7 +512,7 @@ async function uploadFile(file){
   try{const body=new FormData();body.append('file',file);state.doc=await api('/api/documents',{method:'POST',body});state.page=0;state.errors={};state.selected=null;state.pendingOpen=true;invalidateLayout();await refreshLibrary();}
   catch(error){toast(error.message);}
   finally{state.uploading=false;$('#file-input').value='';updateControls();}
-  await prepareDocument();
+  if($('#import-direct')?.checked && state.pendingOpen){state.pendingOpen=false;renderDocument();}else await prepareDocument();
 }
 function choosePage(index){scrollToPage(index);}
 function applyBlockSelection(){
@@ -532,7 +537,7 @@ function selectBlock(id,from,extend=false){
   if(!extend || !readingInteraction.anchor)readingInteraction.anchor=id;
   const anchor=all.findIndex(block=>block.id===readingInteraction.anchor);
   readingInteraction.selection=new Set(all.slice(Math.min(index,anchor),Math.max(index,anchor)+1).map(block=>block.id));
-  state.selected=id;readingInteraction.side=from;rememberBlockLane(id);applyBlockSelection();
+  state.selected=id;readingInteraction.side=from;rememberBlockLane(id);applyBlockSelection();globalThis.PaperAssistant?.selectionChanged();
   const pageIndex=state.doc.pages.findIndex(page=>page.blocks.some(block=>block.id===id));
   if(pageIndex>=0)setCurrentPage(pageIndex);
   const origin=from==='source'?$('#source-pane'):$('#translation-pane');
@@ -545,7 +550,7 @@ function selectBlock(id,from,extend=false){
 }
 function clearBlockSelection(){
   if(state.selected===null && !readingInteraction.selection.size)return;
-  state.selected=null;readingInteraction.anchor=null;readingInteraction.selection.clear();applyBlockSelection();
+  state.selected=null;readingInteraction.anchor=null;readingInteraction.selection.clear();applyBlockSelection();globalThis.PaperAssistant?.selectionChanged();
 }
 function readerClick(event,side){
   const jump=event.target.closest('[data-link-page]');
@@ -696,6 +701,7 @@ $('#zoom-reset').onclick=()=>setReaderZoom(1);
 $('#zoom-fit').onclick=()=>setReaderZoom(1,{fit:true});
 $('#reader-settings').onclick=()=>{$('#reader-menu').open=false;showSettings();};
 $('#back-library').onclick=showLibrary;
+$('#read-direct').onclick=()=>{if(!state.doc || state.preparing || state.running)return;state.pendingOpen=false;renderDocument();};
 $('#open-action').onclick=()=>{if(state.running){state.stop=true;updateControls();}else prepareDocument();};
 $('#focus-reading').onclick=()=>{$('#reader-menu').open=false;document.body.classList.add('reading-focus');$('#exit-focus').focus();};
 function exitFocus(){document.body.classList.remove('reading-focus');$('#reader-menu summary').focus();}
@@ -735,7 +741,7 @@ $('#drop-zone').onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event
 $('#file-input').onchange=()=>uploadFile($('#file-input').files[0]);
 for(const eventName of ['dragenter','dragover'])$('#drop-zone').addEventListener(eventName,event=>{event.preventDefault();$('#drop-zone').classList.add('dragging');});
 for(const eventName of ['dragleave','drop'])$('#drop-zone').addEventListener(eventName,event=>{event.preventDefault();$('#drop-zone').classList.remove('dragging');if(eventName==='drop')uploadFile(event.dataTransfer.files[0]);});
-$('#library').onclick=event=>{const button=event.target.closest('[data-doc]');if(button)openDocument(button.dataset.doc);};
+$('#library').onclick=event=>{const direct=event.target.closest('[data-read-doc]');if(direct){openDocument(direct.dataset.readDoc,true);return;}const button=event.target.closest('[data-doc]');if(button)openDocument(button.dataset.doc);};
 $('#previous-page').onclick=()=>choosePage(state.page-1);$('#next-page').onclick=()=>choosePage(state.page+1);
 $('#page-select').onchange=event=>choosePage(event.target.value);
 $('#target-language').value=state.target;
@@ -745,6 +751,8 @@ $('#home-target').value=state.target;
 $('#home-target').onchange=event=>{state.target=event.target.value;$('#target-language').value=state.target;persist('parallel-target',state.target);state.openMessage='';invalidateLayout();updateControls();};
 $('#target-language').onchange=event=>{state.target=event.target.value;$('#home-target').value=state.target;persist('parallel-target',state.target);invalidateLayout();renderTranslations();refreshLayout();status('目标语言已更新，开始翻译将处理缺少该语言译文的段落');};
 $('#translation-view').onchange=event=>{state.view=event.target.value;renderTranslations();pendingPaneScrolls.delete($('#source-pane'));synchronize('source');if(state.view==='pdf' && !state.layoutBusy && state.layoutKey!==layoutKey())refreshLayout();};
+$('#translation-edit').checked=false;
+$('#translation-edit').onchange=event=>{state.editTranslation=event.target.checked;getSelection()?.removeAllRanges();renderTranslations();};
 $('#translation-concurrency').value=state.concurrency;
 $('#translation-concurrency').onchange=event=>{state.concurrency=Number(event.target.value);persist('parallel-concurrency',state.concurrency);};
 $('#translation-batch-size').value=state.batchSize;
@@ -764,7 +772,7 @@ $('#translation-pane').onclick=async event=>{
 };
 $('#translation-pane').ondblclick=event=>{
   const item=event.target.closest('.block-overlay');
-  if(item && state.view==='pdf' && !state.running)showEdit(blocks().find(block=>block.id===item.dataset.block));
+  if(state.editTranslation && !state.running){const target=item || event.target.closest('.translation-card');if(target)showEdit(blocks().find(block=>block.id===target.dataset.block));}
 };
 for(const side of ['source','translation']){
   const pane=$(`#${side}-pane`);

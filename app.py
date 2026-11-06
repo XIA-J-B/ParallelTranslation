@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from pydantic import BaseModel, Field
 from pdf_layout import PDF_LOCK, build_layout, goto_fraction
 from pdf_references import normalize_document, translation_source, format_translation
 from pdf_text import DROP_CAP_SCHEMA, normalize_drop_caps
+from paper_analysis import install as install_analysis
+from paper_reading import install as install_reading
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("TRANSLATION_DATA_DIR", ROOT / ".data"))
@@ -671,6 +674,9 @@ def export(doc_id: str):
     return Response("\n".join(lines), media_type="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="parallel-translation.md"'})
 
+
+analysis_service = install_analysis(sys.modules[__name__])
+reading_service = install_reading(sys.modules[__name__])
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
