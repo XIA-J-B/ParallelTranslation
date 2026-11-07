@@ -75,7 +75,10 @@ class MultimodalTests(unittest.TestCase):
                 self.assertTrue(any(isinstance(m['content'],list) for m in messages))
                 return baseline.call('search_material',query='Eq. (7) error dynamics')
             return await original(module,config,messages,tools)
-        with patch.object(reading,'invoke',model):job=self.ask()
+        with patch.object(reading, 'invoke', model), patch.object(
+                reading, 'resolve_citation', wraps=resolve_citation) as resolve:
+            job = self.ask()
+        self.assertEqual(resolve.call_count, 1)
         self.assertEqual(job['status'],'completed',job)
         turn=self.client.get(self.url).json()['messages'][-1]
         self.assertEqual(turn['mode_id'],'citation')

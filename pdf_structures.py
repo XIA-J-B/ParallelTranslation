@@ -77,7 +77,8 @@ def anchored_lines(native, rect, graphics, grid, prose, caption):
     return lines if near and (separated or size < body_size * .9) else None
 
 
-def anchored_overlay(overlays, page, block, lines, native, graphics, typography):
+def anchored_overlay(overlays, page, block, lines, native, graphics, typography, *, links=(),
+                     operations=None):
     """Translate individual anchors; untouched text retains its original glyphs.
 
     Positional mappings require one translation line per extracted source line.
@@ -93,6 +94,11 @@ def anchored_overlay(overlays, page, block, lines, native, graphics, typography)
     if len(source) != len(translated):
         return None, None, failure
     changed = [i for i, (a, b) in enumerate(zip(source, translated)) if normalized(a) != normalized(b)]
+    if any((pymupdf.Rect(lines[i]['bbox']) & pymupdf.Rect(link['rect'])).get_area() > .1
+           for i in changed for link in links):
+        return None, None, failure + '（含链接的标签尚无法可靠重新锚定）'
+    if any(s.get('flags', 0) & 1 for i in changed for s in lines[i]['spans']):
+        return None, None, failure + '（含上标的独立标签尚无法可靠逐字对应）'
     owned = {id(s) for i in changed for s in lines[i]['spans']}
     foreign = []
     for b in native:
@@ -106,8 +112,9 @@ def anchored_overlay(overlays, page, block, lines, native, graphics, typography)
                 foreign.append(pymupdf.Rect(line['bbox']))
             else:
                 foreign.extend(pymupdf.Rect(s['bbox']) for s in remaining)
-    operations = [pymupdf.Rect(coords) for kind, coords, *_ in page.get_bboxlog()
-                  if kind == 'fill-text']
+    if operations is None:
+        operations = [pymupdf.Rect(coords) for kind, coords, *_ in page.get_bboxlog()
+                      if kind == 'fill-text']
     fixed_ink = []
     for box in foreign:
         measured = [ink for ink in operations if (box + (-2, -2, 2, 2)).contains(ink)

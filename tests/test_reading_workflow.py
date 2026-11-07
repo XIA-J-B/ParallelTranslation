@@ -209,6 +209,28 @@ class WorkflowTests(unittest.TestCase):
         service.save_doc(service.doc_dir(self.doc['id']), self.doc)
         self.assertEqual(self.client.post(self.url+'/citations', json=request).status_code, 409)
 
+    def test_paragraph_quote_can_select_source_even_when_translation_exists(self):
+        from paper_analysis import digest
+        block = self.doc['pages'][0]['blocks'][0]
+        source_text = block['text']
+        translation = '译文😀片段'
+        block.update(translation=translation, target='简体中文')
+        service.save_doc(service.doc_dir(self.doc['id']), self.doc)
+        source_request = dict(page=1, view='paragraph', block_id=block['id'], translated=False,
+                              text_version=digest(source_text),
+                              ranges=[dict(run_id=block['id'], start=0, end=min(4, len(source_text)))])
+        response = self.client.post(self.url+'/citations', json=source_request)
+        self.assertEqual(response.status_code, 200, response.text)
+        quote = response.json()
+        self.assertEqual(quote['text'], source_text[:4])
+        self.assertFalse(quote['source']['translated'])
+        translated_request = dict(source_request, translated=True, text_version=digest(translation),
+                                  ranges=[dict(run_id=block['id'], start=0, end=min(4, len(translation)))])
+        response = self.client.post(self.url+'/citations', json=translated_request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()['source']['translated'])
+        self.assertEqual(response.json()['text'], translation[:4])
+
     def test_complete_cannot_hide_material_gaps_or_forged_sources(self):
         raw=dict(status='complete',sections=[dict(section=f,text='测试',kind='claim',source_ids=['a']) for f in self.snapshot['manifest']['modes']['quickread']['fields']],missing=[])
         self.assertRaises(HTTPException,workflow.validate,json.dumps(raw),self.snapshot,'quickread',{'a':{}},['缺少结论'])
@@ -301,6 +323,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotEqual(job['progress']['percent'],100)
         self.assertEqual(self.client.get(self.url).json()['messages'],[])
         self.assertEqual(self.finish(self.start())['status'],'completed')
+
+    def test_fulltext_exceeding_local_image_budget_keeps_previous_answer(self):
+        self.assertEqual(self.finish(self.start())['status'], 'completed')
+        previous = self.client.get(self.url).json()['messages']
+        self.calls.clear()
+        with patch.object(reading, 'MAX_IMAGE_BYTES', 1):
+            job = self.finish(self.start())
+        self.assertEqual(job['status'], 'failed')
+        self.assertIn('本轮页面图像超过', job['error'])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get(self.url).json()['messages'], previous)
 
     def test_large_fulltext_is_provided_whole_without_independent_summaries(self):
         self.fulltext_document()

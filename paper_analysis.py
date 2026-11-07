@@ -154,7 +154,7 @@ def outline(doc, path, pdf_lock):
         if items:
             return dict(mode='native', label='PDF 原生目录', items=items)
         for page, saved in zip(pdf, doc['pages']):
-            raw = page.get_text('dict')['blocks']
+            raw = page.get_text('dict', flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)['blocks']
             spans = [s for b in raw if b['type'] == 0 for line in b['lines'] for s in line['spans'] if s['text'].strip()]
             sizes = Counter()
             for s in spans:
@@ -211,8 +211,12 @@ def install(service):
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding='utf-8'))
-                if data.get('version') != VERSION:
+                if not isinstance(data, dict) or data.get('version') != VERSION:
                     raise HTTPException(409, '理解数据版本不兼容，已保留原文件')
+                if (not all(isinstance(data.get(key), dict) for key in ('results', 'chunks', 'jobs'))
+                        or not isinstance(data.get('conversation'), list)
+                        or type(data.get('generation')) is not int):
+                    raise ValueError()
                 return data
             except (ValueError, OSError):
                 raise HTTPException(409, '理解数据无法读取，已保留原文件')
@@ -416,6 +420,8 @@ def install(service):
                              and (j['kind'] == request.kind == 'overview' or
                                   j['kind'] == request.kind == 'question' or j['key'] == key)), None)
             if existing:
+                if existing['key'] != key:
+                    raise HTTPException(409, '当前任务使用不同的模型配置或原文，完成后可用新设置重新请求')
                 if request.kind == 'question' and (existing.get('question') != request.question
                                                    or existing.get('scope') != request.scope
                                                    or existing.get('block_id') != request.block_id):

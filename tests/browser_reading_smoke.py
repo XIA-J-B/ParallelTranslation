@@ -77,8 +77,7 @@ def selection_checks(page):
         page.locator('#quote-toolbar').wait_for(state='visible')
 
     def click_pdf_highlight(pane):
-        box=page.locator(pane+' .saved-text-highlight').first.bounding_box()
-        page.mouse.click(box['x']+box['width']/2,box['y']+box['height']/2)
+        page.locator(pane+' .saved-text-highlight').first.click(force=True)
         page.locator('[data-quote=remove-highlight]').wait_for(state='visible')
 
     def click_paragraph_highlight(color):
@@ -93,24 +92,55 @@ def selection_checks(page):
             raise
 
     page.wait_for_function('state.layout && !state.layoutBusy')
-    page.locator('#translation-pane .source-text-run').first.wait_for()
+    page.locator('#translation-pane .pdf-char[data-run]').first.wait_for()
     assert not page.locator('#translation-edit').is_checked()
     assert page.locator('#quote-toolbar [data-quote]').all_text_contents()==['解释','引用','高亮','取消高亮']
     assert not page.locator('[data-quote=remove-highlight]').is_visible()
-    translated=page.locator('#translation-pane .source-text-run').filter(has_text='译文').first
+    page.locator('#translation-pane .pdf-char[data-run]').first.hover()
+    assert page.locator('#translation-pane .block-edit').count()==0
+    page.mouse.move(5,5)
+    translated=page.locator('#translation-pane .pdf-char[data-run]').filter(has_text='译').first
     translated.dblclick()
     assert not page.locator('#edit-dialog').is_visible()
     page.evaluate('getSelection().removeAllRanges()')
     # Exercise an actual mouse drag, including when the PDF is horizontally pannable.
     page.evaluate('setReaderZoom(2)')
-    run=page.locator('#source-pane .source-text-run').first
+    run=page.locator('#source-pane .pdf-char[data-run]').first
     run.scroll_into_view_if_needed()
     box=run.bounding_box()
     page.mouse.move(box['x']+2,box['y']+box['height']/2);page.mouse.down()
-    page.mouse.move(box['x']+min(box['width']-2,65),box['y']+box['height']/2,steps=10);page.mouse.up()
+    page.mouse.move(box['x']+65,box['y']+box['height']/2,steps=10);page.mouse.up()
     page.locator('#quote-toolbar').wait_for(state='visible')
     assert page.evaluate('getSelection().toString().length')>0
     assert not page.evaluate('readerViewport.pan')
+    # The transparent glyph layer must paint one merged band per visual line
+    # instead of one translucent box per character.
+    bands=page.evaluate("""()=>{const pane=document.querySelector('#source-pane'),range=getSelection().getRangeAt(0);
+        const glyphs=[...pane.querySelectorAll('.pdf-char')].filter(el=>range.intersectsNode(el));
+        const painted=[...pane.querySelectorAll('.pdf-selection-rect')];
+        return {painted:painted.length,glyphs:glyphs.length,
+                width:Math.max(0,...painted.map(el=>el.getBoundingClientRect().width))};}""")
+    assert bands['painted']>=1 and bands['width']>0
+    if bands['glyphs']>1:assert bands['painted']<bands['glyphs']
+    page.screenshot(path='tmp/pdf-selection-bands.png',full_page=True)
+    # A range across several visual lines paints exactly one band per line.
+    page.evaluate("""()=>{const pane=document.querySelector('#source-pane');
+        const lines=[...pane.querySelectorAll('.pdf-text-line')].filter(line=>line.querySelector('.pdf-char[data-run]'));
+        if(lines.length<3)return;
+        const start=lines[0].querySelector('.pdf-char[data-run]'),end=lines[2].querySelector('.pdf-char[data-run]');
+        const range=document.createRange();range.setStart(start.firstChild,0);
+        range.setEnd(end.firstChild,Math.min(3,end.firstChild.textContent.length));
+        const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}""")
+    page.wait_for_function("""()=>{const pane=document.querySelector('#source-pane'),selection=getSelection();
+        if(!selection?.rangeCount)return false;const range=selection.getRangeAt(0);
+        const lines=[...pane.querySelectorAll('.pdf-text-line')].filter(line=>range.intersectsNode(line)).length;
+        return lines>1 && pane.querySelectorAll('.pdf-selection-rect').length===lines;}""")
+    rows=page.evaluate("""()=>{const pane=document.querySelector('#source-pane'),range=getSelection().getRangeAt(0);
+        return {bands:pane.querySelectorAll('.pdf-selection-rect').length,
+                lines:[...pane.querySelectorAll('.pdf-text-line')].filter(line=>range.intersectsNode(line)).length,
+                glyphs:[...pane.querySelectorAll('.pdf-char')].filter(el=>range.intersectsNode(el)).length};}""")
+    assert rows['bands']==rows['lines'] and rows['bands']<rows['glyphs']
+    page.screenshot(path='tmp/pdf-selection-multiline.png',full_page=True)
     select(run)
     page.locator('[data-highlight-color=blue]').click()
     page.locator('[data-quote=highlight]').click()
@@ -130,11 +160,17 @@ def selection_checks(page):
     page.locator('[data-quote=remove-highlight]').click()
     page.wait_for_function("!document.querySelector('#source-pane .saved-text-highlight')")
     page.wait_for_function('state.layout && !state.layoutBusy')
-    translated=page.locator('#translation-pane .source-text-run').filter(has_text='译文').first
+    translated=page.locator('#translation-pane .pdf-char[data-run]').filter(has_text='译').first
     select(translated)
     page.locator('[data-highlight-color=green]').click()
     page.locator('[data-quote=highlight]').click()
     page.wait_for_function("document.querySelector('#translation-pane .saved-text-highlight')?.dataset.color==='green'")
+    if not page.locator('#guided-reading').is_visible(): page.locator('#assistant-toggle').click()
+    page.locator('[data-guide-action=annotations]').click()
+    page.locator('.guide-annotation').first.wait_for()
+    assert '高亮' in page.locator('.guide-annotation').first.inner_text()
+    assert not page.locator('.guide-composer').is_visible()
+    page.locator('[data-guide-action=conversation]').click()
     click_pdf_highlight('#translation-pane')
     page.locator('[data-highlight-color=pink]').click()
     assert page.locator('#translation-pane .saved-text-highlight').first.get_attribute('data-color')=='pink'
@@ -144,6 +180,7 @@ def selection_checks(page):
     page.locator('[data-quote=add]').click()
     page.locator('[data-remove-quote]').wait_for()
     assert '引用译文' in page.locator('#guide-selection').inner_text()
+    assert page.locator('.guide-composer-box #guide-selection').count()==1
     page.locator('[data-preview-quote]').click()
     assert page.locator('#translation-pane .guide-highlight').count()>0
     page.locator('[data-remove-quote]').click()
@@ -195,7 +232,7 @@ def highlight_geometry_checks(page,url):
         assert response.status==200,response.text()
         page.evaluate('id=>openDocument(id,true)',response.json()['id'])
         page.locator('[data-reader-view=source]').click()
-        run=page.locator('#source-pane .source-text-run').first
+        run=page.locator('#source-pane .pdf-char[data-run]').first
         run.wait_for();run.scroll_into_view_if_needed()
         run.evaluate("e=>{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}")
         page.locator('[data-highlight-color=green]').click()
@@ -203,14 +240,14 @@ def highlight_geometry_checks(page,url):
         highlight=page.locator('#source-pane .saved-text-highlight').first
         highlight.wait_for(state='attached')
         assert highlight.get_attribute('data-color')=='green'
-        box=highlight.bounding_box()
-        page.mouse.click(box['x']+box['width']/2,box['y']+box['height']/2)
+        highlight.click(force=True)
         page.locator('[data-quote=remove-highlight]').click()
         page.wait_for_function("!document.querySelector('#source-pane .saved-text-highlight')")
 
 
 def main():
     with tempfile.TemporaryDirectory() as directory:
+        service.EXPORT_DIR=Path(directory)/'exports'
         service.DATA=Path(directory);reading.invoke=fake_model
         config=uvicorn.Config(service.app,host='127.0.0.1',port=18769,log_level='error')
         server=uvicorn.Server(config);thread=threading.Thread(target=server.run,daemon=True);thread.start()
@@ -275,8 +312,8 @@ def main():
                 page.wait_for_function("document.querySelectorAll('.guide-turn').length===5")
                 assert page.locator('.guide-image').count()>=2
                 page.wait_for_function("!document.querySelector('.guide-working')")
-                page.locator('#source-pane .source-text-run').first.scroll_into_view_if_needed()
-                page.locator('#source-pane .source-text-run').first.evaluate("e=>{const r=document.createRange();r.setStart(e.firstChild,0);r.setEnd(e.firstChild,Math.min(5,e.textContent.length));const s=getSelection();s.removeAllRanges();s.addRange(r);}")
+                page.locator('#source-pane .pdf-char[data-run]').first.scroll_into_view_if_needed()
+                page.locator('#source-pane .pdf-char[data-run]').first.evaluate("e=>{const r=document.createRange();r.setStart(e.firstChild,0);r.setEnd(e.firstChild,Math.min(5,e.textContent.length));const s=getSelection();s.removeAllRanges();s.addRange(r);}")
                 page.locator('#quote-toolbar [data-quote=add]').click()
                 page.wait_for_function("document.querySelectorAll('[data-remove-quote]').length===1")
                 page.locator('.guide-more').evaluate('(e)=>e.open=true')
@@ -299,16 +336,16 @@ def main():
                 # Real browser Range selection -> canonical server quote -> multi-quote message.
                 page.locator('.guide-more').evaluate('(e)=>e.open=false')
                 page.locator('#source-pane').evaluate('(e)=>e.scrollTop=0')
-                page.locator('.source-text-run').first.wait_for()
+                page.locator('.pdf-char[data-run]').first.wait_for()
                 for index in (0,1):
-                    page.locator('#source-pane .source-text-run').nth(index).scroll_into_view_if_needed()
-                    page.locator('#source-pane .source-text-run').nth(index).evaluate("e=>{const r=document.createRange();r.setStart(e.firstChild,0);r.setEnd(e.firstChild,Math.min(5,e.textContent.length));const s=getSelection();s.removeAllRanges();s.addRange(r);}")
+                    page.locator('#source-pane .pdf-char[data-run]').nth(index).scroll_into_view_if_needed()
+                    page.locator('#source-pane .pdf-char[data-run]').nth(index).evaluate("e=>{const r=document.createRange();r.setStart(e.firstChild,0);r.setEnd(e.firstChild,Math.min(5,e.textContent.length));const s=getSelection();s.removeAllRanges();s.addRange(r);}")
                     page.locator('#quote-toolbar [data-quote=add]').click()
                     page.wait_for_function(f"document.querySelectorAll('[data-remove-quote]').length==={index+1}")
                 page.locator('[data-remove-quote="0"]').click()
                 assert page.locator('[data-remove-quote]').count()==1
-                page.locator('#source-pane .source-text-run').first.scroll_into_view_if_needed()
-                page.locator('#source-pane .source-text-run').first.evaluate("e=>{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}")
+                page.locator('#source-pane .pdf-char[data-run]').first.scroll_into_view_if_needed()
+                page.locator('#source-pane .pdf-char[data-run]').first.evaluate("e=>{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}")
                 page.locator('#quote-toolbar [data-quote=add]').click()
                 page.wait_for_function("document.querySelectorAll('[data-remove-quote]').length===2")
                 page.locator('#guide-question').fill('比较这两段的作用')
@@ -410,7 +447,7 @@ def main():
                 page.wait_for_function("document.querySelectorAll('.guide-note-entry').length===3")
                 assert page.request.get(url+image_url).status==404
                 page.locator('[data-guide-action=close]').click();assert not page.locator('#guided-reading').is_visible()
-                page.locator('#assistant-toggle').click();page.locator('.guide-more').evaluate('(e)=>e.open=true');page.locator('[data-guide-action=history]').click()
+                page.locator('#assistant-toggle').click();page.locator('.guide-more summary').click();page.locator('[data-guide-action=history]').click()
                 assert page.locator('#reading-assistant').is_visible()
                 page.locator('#assistant-close').click()
                 page.locator('#reader-menu').evaluate('(e)=>e.open=true')

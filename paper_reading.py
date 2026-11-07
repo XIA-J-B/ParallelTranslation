@@ -2,13 +2,11 @@
 import asyncio
 import base64
 import copy
-import hashlib
 import json
 import math
 import re
 import threading
 import uuid
-from pathlib import Path
 
 import pymupdf
 from fastapi import HTTPException
@@ -25,6 +23,7 @@ from reading_text import CitationRequest, resolve_citation, install as install_t
 VERSION = 1
 MAX_TOOLS = 12
 PAGE_CHARS = 10000
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
 CAPTION = re.compile(r'^\s*(?:figure|fig\.?|table|图|表)\s*\d', re.I)
 
 
@@ -213,7 +212,6 @@ def install(service):
         citations: list[CitationRequest] = Field(default_factory=list, max_length=12)
 
     def path(doc_id):
-        service.load_doc(doc_id)
         return service.doc_dir(doc_id) / 'reading.json'
 
     def read(doc_id):
@@ -222,10 +220,12 @@ def install(service):
             return None
         try:
             data = json.loads(p.read_text(encoding='utf-8'))
-            if data['version'] != VERSION:
+            if (data['version'] != VERSION or not re.fullmatch(r'[0-9a-f]{32}', data['id'])
+                    or not isinstance(data['jobs'], dict) or not isinstance(data['messages'], list)
+                    or not isinstance(data['skill']['files'], dict)):
                 raise ValueError()
             return data
-        except (ValueError, KeyError, OSError):
+        except (ValueError, KeyError, TypeError, OSError):
             raise HTTPException(409, '陪读数据无法读取或版本不兼容，原文件已保留')
 
     def write(doc_id, data):
@@ -459,9 +459,8 @@ def install(service):
                 task.get_loop().call_soon_threadsafe(task.cancel)
             return public(data)
 
-    async def execute(doc_id, job_id, request, initial):
+    async def execute(doc_id, job_id, request, initial, doc, quoted):
         session_id = initial['id']
-        doc = service.load_doc(doc_id)
         sources = copy.deepcopy(initial['sources'])
         coverage = copy.deepcopy(initial['coverage'])
         turn_coverage = {}
@@ -470,8 +469,6 @@ def install(service):
         files = initial['skill']['files']
         workflow = initial.get('workflow')
         mode = reading_workflow.mode_for(request.action, request.mode_id, request.question, bool(request.citations))
-        if workflow or mode == 'citation':
-            workflow = reading_workflow.effective(workflow, service.ROOT, mode)
         structured = None
         required_missing = []
         required_issues = []
@@ -481,7 +478,7 @@ def install(service):
         total_chars = sum(len(r['text']) for r in reading_context.rows(doc))
         visual_sources, context_sources, context_map = [], [], []
         visual_cache = {}
-        quoted = [resolve_citation(service, doc_id, c) for c in request.citations]
+        image_bytes = 0
         context = dict(unit_id=initial['unit_id'], route=initial['route'], depth=initial['depth'],
                        selected_block=request.block_id, page=request.page, bbox=request.bbox)
         if scoped or request.action in ('continue', 'start'):
@@ -526,6 +523,7 @@ def install(service):
             return value
 
         def run_tool(name, args):
+            nonlocal image_bytes
             schema = next((t['function']['parameters']['properties'] for t in TOOLS if t['function']['name'] == name), None)
             if schema is None or not isinstance(args, dict) or set(args) - set(schema):
                 raise HTTPException(422, '未知工具或参数')
@@ -563,8 +561,11 @@ def install(service):
                 if args.get('view', 'source') not in ('source', 'translation'):
                     raise HTTPException(422, '页面视图无效')
                 if args.get('view') == 'translation':
-                    service.layout_file(doc_id, args.get('revision', ''))
-                    source.update(view='translation', revision=args['revision'])
+                    revision = args.get('revision')
+                    if not isinstance(revision, str):
+                        raise HTTPException(422, '查看译文图像需要有效的排版版本')
+                    service.layout_file(doc_id, revision)
+                    source.update(view='translation', revision=revision)
                 source_id = 'image-' + digest(source)[:20]
                 if source_id in visual_cache:
                     return dict(id=source_id, source=source, cached=True, note='同一图像已经提供，请使用已有图像'), None
@@ -573,6 +574,9 @@ def install(service):
                     png = render_region(service, doc, source)
                 except (OSError, RuntimeError, ValueError):
                     raise HTTPException(422, f"第 {source['page']} 页指定区域无法渲染，请检查原始PDF或排版版本")
+                if image_bytes + len(png) > MAX_IMAGE_BYTES:
+                    raise HTTPException(413, '本轮页面图像超过本机 64 MiB 容量，请按章节或选区阅读')
+                image_bytes += len(png)
                 sources[source_id] = {**source, 'provided': True}
                 required_issues[:] = [i for i in required_issues if source_id not in i['source_ids']]
                 visual_cache[source_id] = True
@@ -678,6 +682,8 @@ def install(service):
 
         try:
             checkpoint('加载固定版本 Skill')
+            if workflow or mode == 'citation':
+                workflow = reading_workflow.effective(workflow, service.ROOT, mode)
             presentation = reading_workflow.presentation(service.ROOT)
             system = files['SKILL.md'] + '\n\n' + files['adapter.md'] + '\n\n' + presentation['text']
             if workflow and request.action != 'test':
@@ -867,8 +873,7 @@ def install(service):
                 request.mode_id = reading_workflow.mode_for(request.action, request.mode_id, request.question, bool(request.citations))
             if request.mode_id == 'citation' and not request.citations:
                 raise HTTPException(422, '引用问答需要至少一条有效原文或译文引用')
-            for citation in request.citations:
-                resolve_citation(service, doc_id, citation)
+            quoted = [resolve_citation(service, doc_id, citation) for citation in request.citations]
             if request.page is not None:
                 region(doc, request.page, request.bbox)
             elif request.bbox is not None:
@@ -887,7 +892,8 @@ def install(service):
             job['progress'] = dict(phase='preparing', percent=0)
             job.update(mode_id=request.mode_id, citations=[c.model_dump() for c in request.citations])
             data['jobs'][job_id] = job; data['revision'] += 1; write(doc_id, data)
-            running[task_key(doc_id, job_id)] = asyncio.create_task(execute(doc_id, job_id, request, copy.deepcopy(data)))
+            running[task_key(doc_id, job_id)] = asyncio.create_task(
+                execute(doc_id, job_id, request, copy.deepcopy(data), doc, quoted))
             return job
 
     async def shutdown():

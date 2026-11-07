@@ -3,8 +3,10 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pymupdf
+import app as service
 import pdf_layout
 from pdf_structures import anchored_lines, grid_members
 
@@ -75,6 +77,31 @@ class StructuredRegionTests(unittest.TestCase):
                     self.assertAlmostEqual((old['bbox'][0] + old['bbox'][2]) / 2,
                                            (new['bbox'][0] + new['bbox'][2]) / 2, delta=.3)
                     self.assertAlmostEqual(old['origin'][1], new['origin'][1], delta=.1)
+
+    def test_linked_figure_labels_keep_complete_source_and_working_links(self):
+        for rotation in (0, 90, 180, 270):
+            with self.subTest(rotation=rotation), tempfile.TemporaryDirectory() as folder:
+                directory = Path(folder)
+                with patch.object(service, 'DATA', directory), pymupdf.open() as pdf:
+                    page = pdf.new_page(width=500, height=400)
+                    page.draw_rect((50, 90, 220, 250), fill=(.9, .9, .9))
+                    page.draw_rect((260, 90, 440, 250), fill=(.9, .9, .9))
+                    page.insert_text((100, 80), 'First Model', fontsize=10)
+                    page.insert_text((300, 80), 'Second Model', fontsize=10)
+                    label = page.search_for('First Model')[0]
+                    page.insert_link({'kind': pymupdf.LINK_URI, 'from': label, 'uri': 'https://example.org/model'})
+                    page.set_rotation(rotation)
+                    key, document = service.extract_document(pdf.tobytes(), 'linked-labels.pdf')
+                    for block in service.all_blocks(document):
+                        block.update(translation=block['text'].replace('First Model', '第一模型')
+                                     .replace('Second Model', '第二模型'), target='简体中文')
+                    report = pdf_layout.build_layout(directory / key, document, '简体中文')
+                    with pymupdf.open(directory / key / 'layout' / (report['revision'] + '.pdf')) as output:
+                        self.assertIn('First Model', output[0].get_text())
+                        self.assertIn('Second Model', output[0].get_text())
+                        self.assertNotIn('第一模型', output[0].get_text())
+                        self.assertEqual([link['uri'] for link in output[0].get_links()], ['https://example.org/model'])
+                    self.assertTrue(any('链接' in issue['message'] for issue in report['issues']), report)
 
     def test_ambiguous_label_translation_preserves_whole_group(self):
         with pymupdf.open() as pdf:

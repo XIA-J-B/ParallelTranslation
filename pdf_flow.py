@@ -8,7 +8,7 @@ def overlap(a, b):
     return max(0, min(a.x1, b.x1) - max(a.x0, b.x0)) * max(0, min(a.y1, b.y1) - max(a.y0, b.y0))
 
 
-def text_ink_bounds(operations, region):
+def text_ink_bounds(operations, region, text_ops=None):
     """Use painted text bounds only when paint operations belong to one region.
 
     Bboxlog includes a small antialiasing margin, consistently on source and
@@ -17,10 +17,10 @@ def text_ink_bounds(operations, region):
     """
     bounds = None
     allowance = region + (-1.5, -1.5, 1.5, 1.5)
-    for kind, coordinates, *_ in operations:
-        if kind not in {"fill-text", "stroke-text"}:
-            continue
-        box = pymupdf.Rect(coordinates)
+    boxes = text_ops if text_ops is not None else (
+        pymupdf.Rect(coordinates) for kind, coordinates, *_ in operations
+        if kind in {"fill-text", "stroke-text"})
+    for box in boxes:
         if box.is_empty or not overlap(box, region):
             continue
         if not allowance.contains(box):
@@ -72,14 +72,15 @@ def visible_drawings(page):
     return drawings
 
 
-def original_formula_units(page, overlays, candidates, native, graphics, lanes=(), occupied_spans=(), glyph_bounds=None):
+def original_formula_units(page, overlays, candidates, native, graphics, lanes=(), occupied_spans=(), glyph_bounds=None, images=None):
     """Copy safe display equations as vector crops, never re-typeset mathematics.
 
     Fragmented rows, fraction bars and equation labels travel as one unit.
     Crops touching foreign text, images or partially crossing paths stay fixed.
     """
     spans = [span for item in native for line in item["lines"] for span in line["spans"] if span["text"].strip()]
-    images = [pymupdf.Rect(item["bbox"]) for item in page.get_image_info()]
+    if images is None:
+        images = [pymupdf.Rect(item["bbox"]) for item in page.get_image_info()]
     mid = page.rect.width / 2
     lines = [pymupdf.Rect(line["bbox"]) for item in native for line in item["lines"]]
     double_column = (any(box.width > page.rect.width * .2 and box.x1 <= mid + 6 for box in lines)
@@ -160,8 +161,8 @@ def original_formula_units(page, overlays, candidates, native, graphics, lanes=(
                     vector_page.clean_contents()
                 overlays.insert_pdf(vector_source, links=False, annots=False)
         block = {**members[0], "text": " ".join(member["text"] for member in members),
-                 "_members": [key for member in members for key in member.get('_members', [member['id']])],
-                 '_detached_label': any(member.get('_members') == [] for member in members),
+                 "_members": [key for member in members for key in member.get("_members", [member["id"]])],
+                 "_detached_label": any(member.get("_members") == [] for member in members),
                  "_formula": True}
         style = {"spans": owned, "size": max(8, min(12, max(span["size"] for span in owned))), "lines": []}
         result = {"overlay": snapshot, "rect": list(crop), "clip": list(crop), "scale": 1,
@@ -191,6 +192,19 @@ def column_lanes(prepared, source_rects, page_width, prose):
 
 def caption(block):
     return bool(re.match(r"^\s*(?:fig(?:ure)?[.\s]|table\b|algorithm\b|图\s*\d|表\s*\d)", block["text"], re.I))
+
+
+def source_flow_spacing(style, result, prior_style, prior_result, source_gap):
+    """Preserve source ink spacing without overlapping translated font frames."""
+    size = max(style["size"], prior_style["size"])
+    gap, ink_gap, padding = max(source_gap, 1.5, size * .2), None, None
+    if (style.get("ink_bounds") and prior_style.get("ink_bounds")
+            and result.get("ink_insets") is not None
+            and prior_result.get("ink_insets") is not None):
+        ink_gap = style["ink_bounds"][1] - prior_style["ink_bounds"][3]
+        padding = prior_result["ink_insets"][1] + result["ink_insets"][0]
+        gap = max(1.5, size * .2, ink_gap - padding)
+    return gap, ink_gap, padding
 
 
 def reflow_columns(prepared, native, graphics, source_rects, page_width, prose):
@@ -229,6 +243,7 @@ def reflow_columns(prepared, native, graphics, source_rects, page_width, prose):
             lane = min(choices, key=lambda pair: pair[1])[0]
             per_lane.setdefault(lane, []).append(item)
     adjustments = []
+    other_boxes = {id(result): pymupdf.Rect(result["rect"]) for _, _, result in prepared}
     for items in per_lane.values():
         items.sort(key=lambda item: (source_rects[item[0]["id"]].y0, source_rects[item[0]["id"]].x0))
         anchored_headings = set()
@@ -259,26 +274,13 @@ def reflow_columns(prepared, native, graphics, source_rects, page_width, prose):
                 source_gap = source.y0 - anchor.y1
                 size = max(style["size"], prior_style["size"])
                 limit = max(24, size * 2.5)
-                # A gap between two prose paragraphs is their spacing, not
-                # reserved whitespace. Follow it even when the source spaced
-                # paragraphs several lines apart, so a shortened translation
-                # cannot leave a new hole below the previous paragraph.
                 if prose(block["text"]) and prose(prior["text"]):
                     limit = max(limit, size * 4, 40)
                 if -max(3, size * .3) <= source_gap <= limit:
                     # Retain measured source spacing, including heading and
                     # equation gaps, instead of imposing a uniform small gap.
-                    gap = max(source_gap, 1.5, size * .2)
-                    ink_gap = None
-                    ink_padding = None
-                    if (style.get("ink_bounds") and prior_style.get("ink_bounds")
-                            and result.get("ink_insets") is not None
-                            and prior_result.get("ink_insets") is not None):
-                        ink_gap = style["ink_bounds"][1] - prior_style["ink_bounds"][3]
-                        ink_padding = prior_result["ink_insets"][1] + result["ink_insets"][0]
-                        # Match the painted gap, subtracting each translated
-                        # font frame's empty edges. Never overlap layout boxes.
-                        gap = max(1.5, size * .2, ink_gap - ink_padding)
+                    gap, ink_gap, ink_padding = source_flow_spacing(
+                        style, result, prior_style, prior_result, source_gap)
                     box = pymupdf.Rect(result["rect"])
                     top = pymupdf.Rect(prior_result["rect"]).y1 + gap
                     if top < box.y0 - 2:
@@ -288,9 +290,10 @@ def reflow_columns(prepared, native, graphics, source_rects, page_width, prose):
                         # gap under headings whose following text could move.
                         moved = pymupdf.Rect(box.x0, top, box.x1, top + box.height)
                         swept = pymupdf.Rect(box.x0, top, box.x1, max(box.y0, moved.y1))
-                        other_text = [pymupdf.Rect(other["rect"]) for _, _, other in prepared if other is not result]
+                        other_text = [box for identity, box in other_boxes.items() if identity != id(result)]
                         if not any(overlap(swept, obstacle) > .1 for obstacle in fixed + other_text):
                             result["rect"] = [moved.x0, moved.y0, moved.x1, moved.y1]
+                            other_boxes[id(result)] = moved
                             adjustments.append({"blocks": block.get("_members", [block["id"]]),
                                                 "previous": prior.get("_members", [prior["id"]]),
                                                 "previous_bottom": pymupdf.Rect(prior_result["rect"]).y1,

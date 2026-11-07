@@ -4,12 +4,14 @@ import json
 import math
 import threading
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Literal
 
 import pymupdf
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from paper_analysis import digest
+from pdf_selection import page_selection
 
 TEXT_VERSION = 1
 _cache = OrderedDict()
@@ -27,8 +29,18 @@ class CitationRequest(BaseModel):
     text_version: str = Field(max_length=80)
     ranges: list[TextRange] = Field(min_length=1, max_length=300)
     view: Literal['source', 'translation', 'paragraph'] = 'source'
+    translated: bool = True
     revision: str | None = Field(default=None, pattern=r'^[a-f0-9]{24}$')
     block_id: str | None = Field(default=None, max_length=80)
+
+
+@lru_cache(maxsize=32)
+def _pdf_hash(path, mtime_ns, size):
+    fingerprint = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            fingerprint.update(chunk)
+    return fingerprint.hexdigest()
 
 
 def text_layer(service, doc_id, number, revision=None):
@@ -43,14 +55,15 @@ def text_layer(service, doc_id, number, revision=None):
     doc = service.load_doc(doc_id)
     if not 1 <= number <= len(doc['pages']):
         raise HTTPException(422, '文字层页码不存在')
-    fingerprint = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
-    runs, warnings = [], []
+    fingerprint = _pdf_hash(pdf_path.resolve(), stamp.st_mtime_ns, stamp.st_size)
+    runs, warnings, citation_runs = [], [], {}
     with service.PDF_LOCK, pymupdf.open(pdf_path) as pdf:
         page = pdf[number - 1]; width, height = page.rect.width, page.rect.height
         def point(p):
             p = pymupdf.Point(p) * page.rotation_matrix
             return [p.x / width, p.y / height]
-        for block in page.get_text('rawdict', sort=False)['blocks']:
+        native = page.get_text('rawdict', flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
+        for block in native['blocks']:
             if block['type'] != 0:
                 continue
             for line in block['lines']:
@@ -81,10 +94,12 @@ def text_layer(service, doc_id, number, revision=None):
                         block_id = matches[0]['id'] if len(matches) == 1 else None
                         runs.append(dict(id=f'r{len(runs)}', text=text, corners=corners, boxes=boxes,
                                          size=span['size'], font=span['font'], block_id=block_id))
+                        citation_runs[id(span)] = runs[-1]['id']
                     except (ValueError, KeyError, TypeError):
                         warnings.append('部分文字几何无法可靠映射，请使用原图区域。')
+        lines = page_selection(page, native=native, citation_runs=citation_runs)['lines']
     result = dict(version=digest([TEXT_VERSION, fingerprint, number, runs]), page=number, width=width, height=height,
-                  runs=runs, warnings=list(dict.fromkeys(warnings)),
+                  runs=runs, lines=lines, warnings=list(dict.fromkeys(warnings)),
                   note='' if runs else '此页没有可靠文字层，可使用框选图像解读。')
     with _lock:
         _cache[key] = result
@@ -100,7 +115,8 @@ def resolve_citation(service, doc_id, request):
                       for b in p['blocks'] if b['id'] == request.block_id), None)
         if not block:
             raise HTTPException(422, '引用段落不存在')
-        text = block.get('translation') or block['text']
+        translated = bool(request.translated) and bool(block.get('translation'))
+        text = block['translation'] if translated else block['text']
         if request.text_version != digest(text):
             raise HTTPException(409, '段落内容已改变，请重新选择')
         if len(request.ranges) != 1:
@@ -111,7 +127,7 @@ def resolve_citation(service, doc_id, request):
         if item.end - item.start > 16000:
             raise HTTPException(422, '引用过长，请分批选择')
         source = dict(doc_id=doc_id, page=request.page, view='paragraph', block_id=block['id'],
-                      translated=bool(block.get('translation')), text_version=request.text_version,
+                      translated=translated, text_version=request.text_version,
                       ranges=[item.model_dump()], text=text[item.start:item.end])
         return dict(id='quote-' + digest(source)[:20], text=text[item.start:item.end], source=source, block_ids=[block['id']],
                     request=request.model_dump())
@@ -122,15 +138,22 @@ def resolve_citation(service, doc_id, request):
     if request.text_version != layer['version']:
         raise HTTPException(409, '文字层版本已改变，请重新选择')
     lookup = {r['id']: r for r in layer['runs']}
+    visual_order = dict.fromkeys(
+        glyph[9] for line in layer['lines'] for glyph in line if len(glyph) > 9
+    )
+    selected_ids = [item.run_id for item in request.ranges]
+    selected_set = set(selected_ids)
+    # Accept both the original contributor's PDF drawing order and the reader's visual order.
+    if len(selected_ids) != len(selected_set) or not any(
+        selected_ids == [key for key in order if key in selected_set] for order in (lookup, visual_order)
+    ):
+        raise HTTPException(422, '引用字符范围无效或顺序重复')
     selected, boxes, block_ids, canonical = [], [], set(), []
     context_ambiguous = False
-    last_index = -1
     for item in request.ranges:
         run = lookup.get(item.run_id)
-        index = next((i for i, r in enumerate(layer['runs']) if r['id'] == item.run_id), -1)
-        if not run or not 0 <= item.start < item.end <= len(run['text']) or index <= last_index:
+        if not run or not 0 <= item.start < item.end <= len(run['text']):
             raise HTTPException(422, '引用字符范围无效或顺序重复')
-        last_index = index
         selected.append(run['text'][item.start:item.end])
         chosen = run['boxes'][item.start:item.end]
         boxes.append([max(0, min(b[0] for b in chosen)), max(0, min(b[1] for b in chosen)),
@@ -177,8 +200,9 @@ def resolve_citation(service, doc_id, request):
 
 def install(service):
     @service.app.get('/api/documents/{doc_id}/reading/text/{page}')
-    def get_text(doc_id: str, page: int, revision: str | None = None):
-        return text_layer(service, doc_id, page, revision)
+    def get_text(doc_id: str, page: int, revision: str | None = None, display: bool = False):
+        layer = text_layer(service, doc_id, page, revision)
+        return {key: value for key, value in layer.items() if key != ('runs' if display else 'lines')}
 
     @service.app.post('/api/documents/{doc_id}/reading/citations')
     def quote(doc_id: str, request: CitationRequest):

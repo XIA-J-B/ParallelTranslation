@@ -255,6 +255,9 @@ class AnalysisTests(unittest.TestCase):
             self.assertTrue(reached.wait(2))
             second = self.start(force=True)
             self.assertEqual(first['id'], second['id'])
+            other = self.client.post(f"/api/documents/{self.doc['id']}/analysis/jobs",
+                                     json=dict(agent={**self.agent, 'model': 'another-model'}, kind='overview'))
+            self.assertEqual(other.status_code, 409)
             edited = self.client.patch(f"/api/documents/{self.doc['id']}/blocks/{block_id}",
                                        json={'translation': '已人工修订的译文', 'target': '简体中文'})
             self.assertEqual(edited.status_code, 200)

@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>页间 Parallel · PDF 对照翻译</title>
+  <link rel="icon" type="image/x-icon" href="/static/parallel.ico">
+  <link rel="icon" type="image/svg+xml" href="/static/parallel.svg">
   <style>
     #launch-notice{display:none}
     html.needs-server body{margin:0;background:#f4f7f1;color:#293e32;font:16px/1.8 'Segoe UI','Microsoft YaHei',sans-serif}
@@ -44,7 +46,7 @@
     <a href="http://127.0.0.1:8765/">打开本地工作台 →</a>
   </section>
   <aside class="sidebar">
-    <a class="brand" href="/" aria-label="页间首页"><span class="brand-icon">Ⅱ</span><span>页间 <b>Parallel</b></span></a>
+    <a class="brand" href="/" aria-label="页间首页"><img class="brand-icon" src="/static/parallel.svg" alt=""><span>页间 <b>Parallel</b></span></a>
     <div class="workspace-label">你的阅读工作台</div>
     <button id="upload-side" class="new-document"><span>＋</span> 导入 PDF <kbd>本地</kbd></button>
     <div class="section-label">文档库 <span id="library-count">0</span></div>
@@ -85,7 +87,7 @@
             <label class="sync-control"><input id="sync-scroll" type="checkbox" checked> 同步滚动</label>
             <label>并发请求 <select id="translation-concurrency"><option value="1">1 个</option><option value="2">2 个</option><option value="3" selected>3 个（推荐）</option><option value="4">4 个</option><option value="6">6 个</option><option value="8">8 个</option><option value="12">12 个</option></select></label>
             <small class="field-help">适当提高并发可减少等待；8/12 需要服务商允许，遇到限流请调低。顺序模式可参考完整的前文译文。</small>
-            <label>每次请求 <select id="translation-batch-size"><option value="1">1 段（兼容）</option><option value="3" selected>3 段（快速）</option><option value="5">5 段</option></select></label>
+            <label>每次请求 <select id="translation-batch-size"><option value="1">1 段（兼容）</option><option value="3">3 段（快速）</option><option value="5" selected>5 段</option></select></label>
             <small id="batch-help" class="field-help">合并同页段落，减少请求和重复上下文。</small>
             <label>译文视图 <select id="translation-view"><option value="pdf">原版式 PDF</option><option value="paragraph">段落</option></select></label>
             <label class="sync-control"><input id="translation-edit" type="checkbox"> 开启译文编辑</label>
@@ -105,7 +107,7 @@
       </div>
       <div class="progress-track"><div id="progress-bar"></div></div>
       <div class="reader-viewbar">
-        <div class="viewbar-source">原文<span>对照阅读</span></div>
+        <div class="viewbar-source">原文<span>单击定位 · 拖动选词 · Ctrl+C 复制</span></div>
         <div class="viewbar-translation"><span>译文</span><div class="zoom-controls" role="group" aria-label="原文与译文同步缩放">
           <span id="zoom-hint" class="zoom-hint">同步缩放 · Ctrl＋滚轮</span>
           <button id="zoom-out" class="icon-button" aria-label="缩小原文与译文" title="缩小">−</button>
@@ -126,7 +128,7 @@
     <div class="form-row"><label for="api-key">API Key<span class="api-key-field"><input id="api-key" name="api_key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="输入一次，保存后自动读取"><button id="toggle-api-key" type="button" aria-label="显示 API Key" aria-controls="api-key" aria-pressed="false">显示</button></span></label><label>模型名称<input name="model" placeholder="填写服务商支持的模型 ID"></label></div>
     <small class="field-help">保存配置后，密钥保存在当前浏览器的本机存储中（未加密），默认隐藏显示。<button id="clear-api-key" type="button" class="text-button">清除已保存密钥</button></small>
     <label>思考强度<select name="reasoning" id="agent-reasoning"><option value="">服务端默认</option><option value="off">关闭思考</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="max">最高（仅部分服务商）</option></select></label>
-    <small id="reasoning-help" class="field-help">仅 OpenAI 兼容接口生效。服务端默认通常开启思考且强度为高；关闭可省时间与费用，调高会变慢并可能顶到超时。</small>
+    <small id="reasoning-help" class="field-help">仅 OpenAI 兼容接口生效。默认不发送思考参数；各服务商支持范围不同，不支持时请改回服务端默认。</small>
     <div id="custom-fields" class="hidden"><label>请求 JSON 模板<textarea name="template" rows="4" spellcheck="false"></textarea></label><small class="field-help">可用变量：{{prompt}}（含翻译要求和上下文）、{{text}}、{{target}}、{{model}}。认证使用 Bearer Token。</small><label>译文响应字段路径<input name="response_path" placeholder="output 或 data.text 或 choices.0.message.content"></label></div>
     <label>请求超时（秒）<input name="timeout" type="number" min="10" max="600" value="120"></label>
     <p id="connection-status" class="connection-status" role="status"></p>

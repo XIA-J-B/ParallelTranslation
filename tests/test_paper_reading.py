@@ -215,6 +215,11 @@ class ReadingTests(unittest.TestCase):
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_custom_template_does_not_expand_placeholders_in_quoted_paper(self):
+        variables = {'text': 'a literal {{prompt}} token', 'prompt': 'agent instructions'}
+        self.assertEqual(reading_model.expand('paper: {{text}}', variables),
+                         'paper: a literal {{prompt}} token')
+
     async def test_native_tools_images_and_custom_structured_template(self):
         messages=[dict(role='user',content=[dict(type='text',text='看图'),dict(type='image_url',image_url={'url':'data:image/png;base64,a'})])]
         seen=[]

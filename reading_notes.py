@@ -28,7 +28,9 @@ def load(service, doc_id):
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
             if (data['version'] != 1 or not isinstance(data['notes'], list)
-                    or not isinstance(data['deleted_legacy'], list)):
+                    or not isinstance(data['deleted_legacy'], list)
+                    or any(not isinstance(i, str) or not re.fullmatch(r'[0-9a-f]{32}', i)
+                           for i in data['deleted_legacy'])):
                 raise ValueError()
             for note in data['notes']:
                 if (not isinstance(note['id'], str) or not re.fullmatch(r'[0-9a-f]{32}', note['id'])
@@ -44,9 +46,12 @@ def load(service, doc_id):
     for path in sorted(legacy_directory.glob('*.md')):
         if path.is_symlink() or not re.fullmatch(r'[0-9a-f]{32}', path.stem) or path.stem in known:
             continue
-        markdown = path.read_text(encoding='utf-8')
+        try:
+            markdown = path.read_text(encoding='utf-8')
+            created = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+        except (OSError, UnicodeError, ValueError, OverflowError):
+            raise HTTPException(409, f'旧小结 {path.name} 无法读取，原文件已保留')
         title = next((line.lstrip('# ').strip() for line in markdown.splitlines() if line.strip()), '阅读小结')
-        created = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
         data['notes'].append(dict(id=path.stem, title=title[:80], created=created,
             origin_session_id=None, origin_message_id=None, legacy=True, sources={},
             turn=dict(answer=markdown, question='阅读小结', created=created, mode_id='summary')))

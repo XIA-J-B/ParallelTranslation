@@ -4,9 +4,9 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const DEFAULT_AGENT = {mode:'openai', base_url:'https://api.apigoto.com/v1', api_key:'', model:'', reasoning:'', template:'{\n  "input": "{{prompt}}"\n}', response_path:'output', timeout:120};
 function stored(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
 function persist(key, data) { try { localStorage.setItem(key, JSON.stringify(data)); return true; } catch { toast('浏览器存储不可用，设置仅在当前页面有效'); return false; } }
-const state = {token:'', doc:null, library:[], page:0, selected:null, running:false, stop:false, uploading:false, loading:false, activeBlocks:new Set(), concurrency:[1,2,3,4,6,8,12].includes(stored('parallel-concurrency',3))?stored('parallel-concurrency',3):3, errors:{}, view:'pdf', layout:null, layoutKey:'', layoutBusy:false, layoutError:'',
+const state = {token:'', doc:null, library:[], page:0, selected:null, running:false, stop:false, uploading:false, loading:false, activeBlocks:new Set(), concurrency:[1,2,3,4,6,8,12].includes(stored('parallel-concurrency',3))?stored('parallel-concurrency',3):3, errors:{}, view:'pdf', layout:null, layoutKey:null, layoutBusy:false, layoutError:'', docRevision:0,
   agent:{...DEFAULT_AGENT,...stored('parallel-agent',{})}, context:stored('parallel-context',{glossary:'',instructions:''}), target:stored('parallel-target','简体中文')};
-state.batchSize=[1,3,5].includes(stored('parallel-batch-size',3))?stored('parallel-batch-size',3):3;
+state.batchSize=[1,3,5].includes(stored('parallel-batch-size',5))?stored('parallel-batch-size',5):5;
 state.batchSupported=false;
 state.pendingOpen=false;
 state.preparing=false;
@@ -15,12 +15,32 @@ state.editTranslation=false;
 let toastTimer, editBlock;
 const pendingPaneScrolls=new WeakMap();
 const readingInteraction={side:'source',lane:.25,hovered:null,anchor:null,selection:new Set()};
-const readerViewport={zoom:1,fit:true,documentId:null,pan:null,suppressClick:null,imageTimer:null};
+const readerViewport={zoom:1,fit:true,documentId:null,imageTimer:null};
 const MIN_READER_ZOOM=.1, MAX_READER_ZOOM=6, PDF_CSS_SCALE=96/72;
-let layoutRequest = 0;
+let layoutRequest = 0, layoutTimer = null, layoutScheduled = null;
 const layoutUpdates=TranslationQueue.createCoalescedTask(generateLayout);
-function layoutKey(){return JSON.stringify([state.doc?.id,state.target,blocks().map(b=>[b.id,b.translation,b.target])]);}
-function invalidateLayout(preserve=false){if(!preserve){layoutRequest++;state.layout=null;state.layoutKey='';state.layoutBusy=false;}state.layoutError='';updateLayoutControls();}
+// A monotonic revision is enough: every translation/target change bumps it,
+// and the last successful layout records the revision it represents. The old
+// JSON.stringify over every block ran on every progress tick.
+function layoutKey(){return state.docRevision;}
+function invalidateLayout(preserve=false){
+  state.docRevision++;
+  if(!preserve){layoutRequest++;state.layout=null;state.layoutKey=null;state.layoutBusy=false;}
+  state.layoutError='';updateLayoutControls();
+}
+function cancelScheduledLayout(){
+  if(layoutTimer){clearTimeout(layoutTimer);layoutTimer=null;layoutScheduled=null;}
+}
+function scheduleLayout(){
+  if(layoutScheduled)return layoutScheduled;
+  layoutScheduled=new Promise(resolve=>{
+    layoutTimer=setTimeout(()=>{
+      layoutTimer=null;layoutScheduled=null;
+      refreshLayout().then(resolve,resolve);
+    },2500);
+  });
+  return layoutScheduled;
+}
 function updateLayoutControls(){
   const valid=Boolean(state.layout),fresh=valid && state.layoutKey===layoutKey();
   $('#refresh-layout').disabled=state.layoutBusy || state.running || !state.doc;
@@ -33,17 +53,21 @@ function updateLayoutControls(){
   if(valid && state.layout.saved_pdf)$('#layout-issues').innerHTML+=`<li>已自动保存：${escapeHtml(state.layout.saved_pdf)}。可在本地直接打开；部分区域可能保留原文，请查看排版提示。</li>`;
   if(valid && state.layout.save_error)$('#layout-issues').innerHTML+=`<li>${escapeHtml(state.layout.save_error)}</li>`;
 }
-function refreshLayout(){return layoutUpdates.request();}
+function refreshLayout(){cancelScheduledLayout();return layoutUpdates.request();}
 async function generateLayout(){
   if(!state.doc)return;
+  if(state.layout && state.layoutKey===layoutKey())return;
   const request=layoutRequest, key=layoutKey(), id=state.doc.id, target=state.target;
   state.layoutBusy=true;state.layoutError='';updateLayoutControls();
-  if(state.view==='pdf' && !state.pendingOpen)renderTranslations();
   try{
     const report=await api(`/api/documents/${id}/layout`,{method:'POST',body:JSON.stringify({target})});
     if(request!==layoutRequest)return;
-    state.layout=report;state.layoutKey=key;
-    if(report.save_error)toast(report.save_error);
+    if(!report || report.empty || !report.revision){
+      state.layout=null;state.layoutKey=null;
+    }else{
+      state.layout=report;state.layoutKey=key;
+      if(report.save_error)toast(report.save_error);
+    }
   }catch(error){if(request!==layoutRequest)return;state.layoutError=error.message;}
   finally{
     if(request===layoutRequest){state.layoutBusy=false;updateLayoutControls();if(state.view==='pdf' && state.doc?.id===id && !state.pendingOpen)renderTranslations();}
@@ -96,20 +120,25 @@ async function api(path, options={}) {
   const headers = {'X-Local-Token':state.token,...options.headers};
   if(options.body && !(options.body instanceof FormData)) headers['Content-Type']='application/json';
   const response = await fetch(path,{...options,headers});
-  if(!response.ok) { let message; try { const data=await response.json(); message=typeof data.detail==='string'?data.detail:'请求参数无效，请检查设置'; } catch { message=`请求失败（HTTP ${response.status}）`; } throw Object.assign(new Error(message),{status:response.status,retryable:response.headers.get('X-Translation-Retryable')==='true',fallback:response.headers.get('X-Translation-Fallback')}); }
+  if(!response.ok) { let message; try { const data=await response.json(); message=typeof data.detail==='string'?data.detail:'请求参数无效，请检查设置'; } catch { message=`请求失败（HTTP ${response.status}）`; } const retryAfter=Number(response.headers.get('X-Translation-Retry-After')); throw Object.assign(new Error(message),{status:response.status,retryable:response.headers.get('X-Translation-Retryable')==='true',fallback:response.headers.get('X-Translation-Fallback'),retryAfter:Number.isFinite(retryAfter)?retryAfter:0,fatal:response.status===401||response.status===403}); }
   return response.json();
 }
 function currentPage(){return state.doc?.pages[state.page];}
 function blocks(){return state.doc?.pages.flatMap(page=>page.blocks) ?? [];}
 function isTranslated(block){return Boolean(block.translation) && block.target===state.target;}
 function status(message,error=false){$('#job-status').textContent=message;$('#job-status').classList.toggle('error',error);}
-function updateControls(){
+function updateProgressControls(){
   const count=blocks().filter(isTranslated).length,total=blocks().length;
   updateOpenProgress(count,total);
   $('#progress-bar').style.width=`${total?count/total*100:0}%`;
   $('#translation-count').textContent=`${count} / ${total} 段已译 · ${state.target}`;
   $('#translate-all').textContent=state.running?(state.stop?'正在暂停…':'Ⅱ 暂停翻译'):(count && count<total?'✦ 继续翻译':'✦ 翻译全文');
   $('#translate-all').disabled=state.uploading || state.loading || !total || (state.running && state.stop);
+  $('#reading-activity').classList.toggle('hidden',!state.running);
+  $('#reading-activity').textContent=state.stop?'正在暂停…':`翻译中 · ${state.activeBlocks.size} 段`;
+}
+function updateControls(){
+  updateProgressControls();
   $('#translate-page').disabled=state.running || !currentPage()?.blocks.length;
   $('#target-language').disabled=state.running;
   $('#translation-concurrency').disabled=state.running;
@@ -119,11 +148,9 @@ function updateControls(){
   $('#reader-settings').disabled=state.running;
   $('#back-library').disabled=state.running;
   document.body.classList.toggle('translating',state.running);
-  $('#reading-activity').classList.toggle('hidden',!state.running);
-  $('#reading-activity').textContent=state.stop?'正在暂停…':`翻译中 · ${state.activeBlocks.size} 段`;
   $('#context-button').disabled=state.running;
   $('#upload-side').disabled=state.running || state.uploading || state.loading || state.preparing;
-  $$('.library-item').forEach(button=>button.disabled=state.running || state.uploading || state.loading || state.preparing);
+  $$('.library-item,.library-read').forEach(button=>button.disabled=state.running || state.uploading || state.loading || state.preparing);
   $('#previous-page').disabled=state.page<=0;
   $('#next-page').disabled=!state.doc || state.page>=state.doc.pages.length-1;
   $$('.card-actions button').forEach(button=>button.disabled=state.running);
@@ -145,7 +172,7 @@ function renderDocument(ready=false){
   $('#page-select').innerHTML=state.doc.pages.map((page,i)=>`<option value="${i}">${page.number}</option>`).join('');
   $('#page-total').textContent=`/ ${state.doc.pages.length}`;
   $('#export').href=`/api/documents/${state.doc.id}/export`;
-  if(!ready)invalidateLayout();renderPage();renderLibrary();status('准备就绪 · 单击同步选中，点击空白取消 · Shift 连选');if(!ready)refreshLayout();globalThis.PaperAssistant?.documentChanged();
+  if(!ready)invalidateLayout();renderPage();renderLibrary();status('准备就绪 · 单击同步选中，点击空白取消 · Shift 连选');if(!ready && blocks().some(isTranslated))refreshLayout();globalThis.PaperAssistant?.documentChanged();
 }
 const SOFT_LIST_LINE=/^\s*(?:[•·●▪▫◦‣∙⋅※■□◆◇]|\(?\d{1,2}[.)]|[A-Za-z][.)])\s+/m;
 function proseSource(text){
@@ -295,7 +322,9 @@ function applyViewportGeometry(){
     // padding contributes the same scroll range as the translated PDF pane.
     const stack=pane.querySelector('#pdf-page');
     if(stack)stack.style.width=`${Math.max(available,...state.doc.pages.map(page=>page.width*PDF_CSS_SCALE*readerViewport.zoom))}px`;
-    pane.classList.toggle('can-pan',pane.scrollWidth>pane.clientWidth+1);
+    for(const layer of pane.querySelectorAll('.pdf-text-layer')){
+      layer.style.transform=`scale(${readerViewport.zoom*PDF_CSS_SCALE})`;
+    }
   }
   updateZoomControls();scheduleReaderImages();globalThis.OriginalTextSelection?.refresh();
 }
@@ -320,7 +349,9 @@ function restoreViewportAnchor(pane,anchor){
 function setReaderZoom(value,{side='translation',clientX,clientY,fit=false}={}){
   if(!state.doc || state.view!=='pdf')return;
   const zoom=Number(value);if(!fit && !Number.isFinite(zoom))return;
-  const panes=pdfPanes(),origin=$(`#${side}-pane`),bounds=origin.getBoundingClientRect();
+  const panes=pdfPanes().filter(pane=>pane.clientWidth>0);
+  if(!panes.length)return;
+  const preferred=$(`#${side}-pane`),origin=panes.includes(preferred)?preferred:panes[0],bounds=origin.getBoundingClientRect();
   const x=clientX ?? bounds.left+origin.clientWidth/2,y=clientY ?? bounds.top+origin.clientHeight/2;
   // Each side keeps its own corresponding reading position. Scroll events
   // caused by resizing must not replace the cursor anchor with a top-of-pane anchor.
@@ -333,7 +364,7 @@ function setReaderZoom(value,{side='translation',clientX,clientY,fit=false}={}){
 }
 function refreshReaderViewport(){
   if(!state.doc || $('#reader').classList.contains('hidden'))return;
-  const panes=pdfPanes(),anchors=panes.map(pane=>captureViewportAnchor(pane));
+  const panes=pdfPanes().filter(pane=>pane.clientWidth>0),anchors=panes.map(pane=>captureViewportAnchor(pane));
   applyViewportGeometry();panes.forEach((pane,i)=>restoreViewportAnchor(pane,anchors[i]));
 }
 function readerWheel(event,side){
@@ -343,47 +374,107 @@ function readerWheel(event,side){
   const delta=Math.max(-100,Math.min(100,event.deltaY*unit));
   if(delta)setReaderZoom(readerViewport.zoom*Math.exp(-delta*.002),{side,clientX:event.clientX,clientY:event.clientY});
 }
-function startReaderPan(event,side){
-  readerViewport.suppressClick=null;
-  const pane=$(`#${side}-pane`);
-  if(event.button!==0 || event.pointerType==='touch' || event.shiftKey || event.ctrlKey || event.metaKey
-      || !event.target.closest('.pdf-page') || pane.scrollWidth<=pane.clientWidth+1)return;
-  readerViewport.pan={side,pane,pointerId:event.pointerId,x:event.clientX,y:event.clientY,
-    left:pane.scrollLeft,top:pane.scrollTop,moved:false};
+function textLayerHtml(page,image){
+  // Page images may carry ?scale=...; the text layer URL must stay query-free.
+  const path=String(image||'').split('?')[0];
+  const match=path.match(/^(.+?)(?:\/layout\/([^/]+))?\/pages\/(\d+)\.png$/);
+  const readingUrl=match?`${match[1]}/reading/text/${match[3]}?display=true${match[2]?'&revision='+match[2]:''}`:'';
+  return `<div class="pdf-text-layer" data-text-url="${escapeHtml(path.replace(/\.png$/,'/text'))}" data-reading-url="${escapeHtml(readingUrl)}" data-view="${match?.[2]?'translation':'source'}" data-revision="${match?.[2]||''}" style="width:${page.width}px;height:${page.height}px" aria-label="可选择的页面文字"></div>`;
 }
-function moveReaderPan(event){
-  const pan=readerViewport.pan;if(!pan || event.pointerId!==pan.pointerId)return false;
-  const dx=event.clientX-pan.x,dy=event.clientY-pan.y;
-  if(!pan.moved && Math.hypot(dx,dy)<6)return false;
-  if(!pan.moved){pan.moved=true;pan.pane.setPointerCapture(event.pointerId);pan.pane.classList.add('reader-panning');hoverBlock(null);}
-  event.preventDefault();
-  setPaneScroll(pan.pane,pan.top-dy,pan.left-dx);
-  if($('#sync-scroll').checked){
-    if(Math.abs(dy)>1){pendingPaneScrolls.delete(pan.pane);synchronize(pan.side);}
-    else{
-      const other=$(`#${pan.side==='source'?'translation':'source'}-pane`);
-      const range=pan.pane.scrollWidth-pan.pane.clientWidth;
-      setPaneScroll(other,other.scrollTop,range>0?pan.pane.scrollLeft/range*Math.max(0,other.scrollWidth-other.clientWidth):0);
+async function loadReaderText(page){
+  const layer=page.querySelector('.pdf-text-layer');
+  if(!layer || layer.dataset.loading || layer.dataset.loaded)return;
+  if(Number(layer.dataset.retryAfter || 0)>Date.now())return;
+  layer.dataset.loading='true';
+  try{
+    let data;
+    if(layer.dataset.readingUrl){
+      try{data=await api(layer.dataset.readingUrl);}catch{ /* Keep native copy available if citation metadata cannot be read. */ }
     }
+    if(!data)data=await api(layer.dataset.textUrl);
+    if(!layer.isConnected)return;
+    const canvas=document.createElement('canvas'),measure=canvas.getContext('2d');
+    const fragment=document.createDocumentFragment();
+    if(data.version){layer.dataset.version=data.version;layer.dataset.page=data.page;}
+    for(const line of data.lines){
+      const row=document.createElement('span');row.className='pdf-text-line';
+      for(const [text,x,y,width,height,a,b,c,d,run,start] of line){
+        const glyph=document.createElement('span');glyph.className='pdf-char';glyph.textContent=text;
+        if(run){glyph.dataset.run=run;glyph.dataset.start=start;}
+        measure.font=`${height}px sans-serif`;
+        const scale=width/Math.max(.001,measure.measureText(text).width);
+        glyph.style.cssText=`left:${x}px;top:${y}px;font-size:${height}px;transform:matrix(${a*scale},${b*scale},${c},${d},0,0)`;
+        row.append(glyph);
+      }
+      row.append(document.createElement('br'));fragment.append(row);
+    }
+    layer.replaceChildren(fragment);layer.dataset.loaded='true';
+    const noticeText=data.note || data.warnings?.join(' ') || (layer.dataset.readingUrl && !data.version?'引用定位暂不可用，仍可复制文字或框选原图。':'');
+    if(noticeText){const notice=document.createElement('small');notice.className='text-layer-notice';notice.textContent=noticeText;page.append(notice);}
+    globalThis.OriginalTextSelection?.refresh();
+    layer.removeAttribute('title');
+  }catch(error){
+    if(layer.isConnected){layer.dataset.retryAfter=String(Date.now()+5000);layer.title='文字选择加载失败，滚动页面后重试';toast('页面文字加载失败，滚动后会重试；仍可使用段落视图复制译文。');}
+  }finally{delete layer.dataset.loading;}
+}
+function hasReaderTextSelection(side){
+  const selection=globalThis.getSelection?.();
+  const pane=$(`#${side}-pane`);
+  return Boolean(selection && !selection.isCollapsed &&
+    (pane.contains(selection.anchorNode) || pane.contains(selection.focusNode)));
+}
+function copyReaderText(event,side){
+  const selection=globalThis.getSelection?.();
+  if(!event.clipboardData || !hasReaderTextSelection(side))return;
+  const node=selection.anchorNode,element=node?.nodeType===1?node:node?.parentElement;
+  if(!element?.closest('.pdf-text-layer'))return;
+  // The transparent positioning layer must never paste as invisible rich text.
+  event.clipboardData.setData('text/plain',selection.toString());event.preventDefault();
+}
+function readerOverlayTarget(event,selector){
+  if(!event.target.closest('.pdf-text-layer'))return null;
+  const page=event.target.closest('.pdf-page');
+  return [...page.querySelectorAll(selector)].find(item=>{
+    const box=item.getBoundingClientRect();
+    return event.clientX>=box.left && event.clientX<=box.right && event.clientY>=box.top && event.clientY<=box.bottom;
+  }) || null;
+}
+function selectReaderWord(event){
+  const glyph=event.target.closest('.pdf-char');if(!glyph)return;
+  const chars=[...glyph.parentElement.querySelectorAll('.pdf-char')];
+  const text=chars.map(item=>item.textContent).join('');
+  const index=chars.slice(0,chars.indexOf(glyph)).reduce((length,item)=>length+item.textContent.length,0);
+  // Absolutely positioned PDF glyphs are separate boxes to the browser's word
+  // hit-testing. Segment their logical line, then select the original text nodes.
+  const segments=typeof Intl.Segmenter==='function'?
+    [...new Intl.Segmenter(undefined,{granularity:'word'}).segment(text)].map(s=>[s.index,s.segment.length]):
+    [...text.matchAll(/[\p{L}\p{N}_]+|[^\s]/gu)].map(s=>[s.index,s[0].length]);
+  const segment=segments.find(([start,length])=>index>=start && index<start+length);
+  if(!segment)return;
+  const [start,length]=segment,end=start+length,range=document.createRange();let offset=0;
+  for(const item of chars){
+    const next=offset+item.textContent.length;
+    if(start>=offset && start<next)range.setStart(item.firstChild,start-offset);
+    if(end>offset && end<=next){range.setEnd(item.firstChild,end-offset);break;}
+    offset=next;
   }
-  pendingPaneScrolls.set(pan.pane,{top:pan.pane.scrollTop,left:pan.pane.scrollLeft});
-  readingInteraction.side=pan.side;return true;
+  const selection=globalThis.getSelection();selection.removeAllRanges();selection.addRange(range);
+  event.preventDefault();
 }
-function endReaderPan(event){
-  const pan=readerViewport.pan;if(!pan || event.pointerId!==pan.pointerId)return;
-  readerViewport.pan=null;pan.pane.classList.remove('reader-panning');
-  if(pan.moved)readerViewport.suppressClick=pan.side;
-  if(pan.pane.hasPointerCapture(event.pointerId))pan.pane.releasePointerCapture(event.pointerId);
-}
-function suppressPanClick(event,side){
-  if(readerViewport.suppressClick===side && event.detail!==0){event.preventDefault();event.stopImmediatePropagation();}
+function imageQuality(){
+  return Math.min(6,Math.max(1.7,Math.ceil(readerViewport.zoom*PDF_CSS_SCALE*(globalThis.devicePixelRatio || 1)*2)/2));
 }
 function scheduleReaderImages(){
   clearTimeout(readerViewport.imageTimer);
   readerViewport.imageTimer=setTimeout(()=>{
-    const quality=Math.min(6,Math.max(1.7,Math.ceil(readerViewport.zoom*PDF_CSS_SCALE*(window.devicePixelRatio || 1)*2)/2));
+    const quality=imageQuality();
     for(const pane of pdfPanes()){
+      if(!pane.clientWidth)continue;
       const bounds=pane.getBoundingClientRect();
+      for(const page of pageElements(pane)){
+        const box=page.getBoundingClientRect();
+        if(box.bottom>=bounds.top && box.top<=bounds.bottom)loadReaderText(page);
+      }
       for(const img of pane.querySelectorAll('.pdf-page img')){
         const box=img.getBoundingClientRect();
         if(box.bottom<bounds.top || box.top>bounds.bottom)continue;
@@ -432,24 +523,37 @@ function renderTranslations(){
   if(!state.doc){pane.innerHTML='';return;}
   const top=pane.scrollTop, left=pane.scrollLeft, position=panePosition(pane);
   pane.classList.toggle('pdf-mode',state.view==='pdf');
-  pane.classList.toggle('translation-editing',state.editTranslation);
   pane.classList.toggle('pages-stack',state.view==='pdf');
+  pane.classList.toggle('translation-editing',state.editTranslation);
   if(state.view==='pdf'){
-    const valid=Boolean(state.layout);
+    const valid=Boolean(state.layout),quality=imageQuality();
     pane.innerHTML=state.doc.pages.map((page,pageIndex)=>{
-      const image=valid?`/api/documents/${state.doc.id}/layout/${state.layout.revision}/pages/${page.number}.png`:`/api/documents/${state.doc.id}/pages/${page.number}.png`;
+      const image=(valid?`/api/documents/${state.doc.id}/layout/${state.layout.revision}/pages/${page.number}.png`:`/api/documents/${state.doc.id}/pages/${page.number}.png`)+`?scale=${quality}`;
       const pageLinks=valid?layoutLinksForPage(page.number):page.links;
-      return `<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" src="${image}" alt="第 ${page.number} 页${valid?'译文':'原文占位'}" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=valid?(state.layout.placements[block.id] || block.bbox):block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文${state.editTranslation?'，双击编辑':''}" title="${state.editTranslation?'单击同步选中，双击编辑译文':'拖动选择文字，可解释、引用和高亮'}" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${linkOverlays(pageLinks)}</div>`;
+      return `<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" data-render-scale="${quality}" src="${image}" alt="第 ${page.number} 页${valid?'译文':'原文占位'}" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=valid?(state.layout.placements[block.id] || block.bbox):block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文${state.editTranslation?'，双击编辑':''}" title="${state.editTranslation?'单击同步选中，双击编辑译文':'拖动选择文字，可解释、引用和高亮'}" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${textLayerHtml(page,image)}${linkOverlays(pageLinks)}</div>`;
     }).join('');
     const untranslated=blocks().filter(block=>!isTranslated(block)).length;
-    if(!valid || untranslated){const notice=document.createElement('div');notice.className='layout-notice';notice.textContent=valid?`还有 ${untranslated} 段未译，未译区域保留原文；可选中段落精读或从菜单开始翻译。`:state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'未译区域显示原文；可选中段落精读，或从菜单开始翻译');pane.prepend(notice);}
+    if(!valid || untranslated){
+      const notice=document.createElement('div');notice.className='layout-notice';
+      notice.textContent=valid?`还有 ${untranslated} 段未译，可选中原文精读或从菜单开始翻译。`:state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'可选中原文精读，或从菜单开始翻译');
+      pane.prepend(notice);
+    }
     $$('#translation-pane .pdf-page img').forEach(img=>img.addEventListener('error',()=>toast('译文页面加载失败，请点击重新排版或切换段落视图')));
     refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
-    applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();globalThis.OriginalTextSelection?.refresh();return;
+    applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();return;
   }
   pane.innerHTML=state.doc.pages.map((page,pageIndex)=>`<section class="reader-page paragraph-page" data-page-index="${pageIndex}" aria-label="第 ${page.number} 页译文"><div class="page-divider">第 ${page.number} 页</div>${page.blocks.length?page.blocks.map(renderCard).join(''):'<div class="ocr-notice"><strong>这一页没有可提取的文字</strong><br>可能是扫描件、图片页或空白页。第一版暂不包含 OCR，请先用 OCR 工具生成可搜索 PDF 后再导入。其他含文字的页面仍可正常翻译。</div>'}</section>`).join('');
   refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
-  applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();globalThis.OriginalTextSelection?.refresh();
+  applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();
+}
+function updateCard(blockId){
+  // Paragraph view only needs the card that changed; rebuilding every page on
+  // each completed block is quadratic on long documents.
+  if(state.view!=='paragraph' || state.pendingOpen)return;
+  const list=blocks(),index=list.findIndex(block=>block.id===blockId);
+  if(index<0)return;
+  const element=document.getElementById(`card-${blockId}`);
+  if(element)element.outerHTML=renderCard(list[index],index);
 }
 function renderPage(){
   if(!state.doc)return;
@@ -457,7 +561,8 @@ function renderPage(){
   const stack=$('#pdf-page');
   stack.classList.add('pages-stack');
   stack.style.aspectRatio='';
-  stack.innerHTML=state.doc.pages.map((page,pageIndex)=>`<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" src="/api/documents/${state.doc.id}/pages/${page.number}.png" alt="${escapeHtml(state.doc.name)} 第 ${page.number} 页" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文" title="第 ${page.number} 页第 ${i+1} 段" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${linkOverlays(page.links)}</div>`).join('');
+  const quality=imageQuality();
+  stack.innerHTML=state.doc.pages.map((page,pageIndex)=>`<div class="pdf-page reader-page" data-page-index="${pageIndex}" style="aspect-ratio:${page.width}/${page.height}"><img ${pageIndex===state.page?'':'loading="lazy" '}decoding="async" data-render-scale="${quality}" src="/api/documents/${state.doc.id}/pages/${page.number}.png?scale=${quality}" alt="${escapeHtml(state.doc.name)} 第 ${page.number} 页" draggable="false">${page.blocks.map((block,i)=>{const [x0,y0,x1,y1]=block.bbox;return `<button class="block-overlay ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" aria-label="定位第 ${page.number} 页第 ${i+1} 段译文" title="第 ${page.number} 页第 ${i+1} 段" style="left:${x0*100}%;top:${y0*100}%;width:${(x1-x0)*100}%;height:${(y1-y0)*100}%"></button>`;}).join('')}${textLayerHtml(page,`/api/documents/${state.doc.id}/pages/${page.number}.png?scale=${quality}`)}${linkOverlays(page.links)}</div>`).join('');
   $$('#pdf-page img').forEach(img=>img.addEventListener('error',()=>toast('PDF 页面渲染失败，请重新打开文档')));
   renderTranslations();
   scrollToPage(state.page);
@@ -553,6 +658,10 @@ function clearBlockSelection(){
   state.selected=null;readingInteraction.anchor=null;readingInteraction.selection.clear();applyBlockSelection();globalThis.PaperAssistant?.selectionChanged();
 }
 function readerClick(event,side){
+  // A drag or native word selection must not scroll either pane or open an editor.
+  if(!event.target.closest('[data-action]') && hasReaderTextSelection(side))return;
+  const link=readerOverlayTarget(event,'.link-overlay');
+  if(link){link.click();return;}
   const jump=event.target.closest('[data-link-page]');
   if(jump){
     const index=Number(jump.dataset.linkPage),fraction=Number(jump.dataset.linkFraction)||0;
@@ -647,47 +756,63 @@ function validAgent(){
   if(!state.agent.base_url || (state.agent.mode==='openai' && !state.agent.model.trim())){showSettings();toast('请先填写接口地址和模型名称');return false;}
   return true;
 }
-async function runTranslation(selectedBlocks){
+async function runTranslation(selectedBlocks,retryPass=false){
   if(state.running || !selectedBlocks.length)return;
   if(!validAgent())return;
   $('#reader-menu').open=false;
   state.running=true;state.stop=false;updateControls();
-  let done=0,failure='';
+  let done=0,failure='',fatal=false,paused=false;
+  const failed=new Set();
   const request={agent:{...state.agent},target:state.target,...state.context};
   const docId=state.doc.id;
-  const groups=TranslationQueue.groupByPage(state.doc.pages,selectedBlocks,state.batchSupported && state.agent.mode==='openai'?state.batchSize:1);
-  const pageTracker=TranslationQueue.createPageTracker(state.doc.pages,selectedBlocks,()=>{if(!state.pendingOpen)refreshLayout();});
-  let allowBatch=true;
+  const canBatch=state.batchSupported && state.agent.mode==='openai' && !retryPass;
+  const groups=TranslationQueue.groupByPage(state.doc.pages,selectedBlocks,canBatch?state.batchSize:1,12000,4000);
+  const pageTracker=TranslationQueue.createPageTracker(state.doc.pages,selectedBlocks,()=>{if(!state.pendingOpen)scheduleLayout();});
+  let allowBatch=canBatch,fallbackStreak=0;
   const send=(path,body)=>TranslationQueue.withRetry(()=>api(path,{method:'POST',body:JSON.stringify(body)}),{
     shouldStop:()=>state.stop,
-    onRetry:(error,attempt,total)=>{state.openMessage=`${error.message} · 正在重试（${attempt}/${total}）…`;status(state.openMessage);updateControls();}
+    onRetry:(error,attempt,total)=>{state.openMessage=`${error.message} · 正在重试（${attempt}/${total}）…`;status(state.openMessage);updateProgressControls();}
   });
-  function progress(){
-    if(failure)status(`已暂停：${failure}${state.activeBlocks.size?` · 等待 ${state.activeBlocks.size} 段返回`:''}`,true);
+  function progress(blockId){
+    if(failure)status(`${failure}${state.activeBlocks.size?` · 等待 ${state.activeBlocks.size} 段返回`:''}`,true);
     else status(`${state.stop?'正在暂停':'正在翻译'} · 已完成 ${done} / ${selectedBlocks.length} 段 · ${state.activeBlocks.size} 段处理中`);
-    if(state.view==='paragraph' && !state.pendingOpen)renderTranslations();else updateControls();
+    if(state.view==='paragraph' && !state.pendingOpen){
+      if(blockId)updateCard(blockId);else updateProgressControls();
+    }else updateProgressControls();
   }
   try{
     await TranslationQueue.run({items:groups,concurrency:state.concurrency,shouldStop:()=>state.stop,
       translate:group=>TranslationQueue.translateGroup({blocks:group.blocks,canBatch:()=>allowBatch,shouldStop:()=>state.stop,
         translateBatch:items=>send(`/api/documents/${docId}/blocks/translate-batch`,{...request,block_ids:items.map(b=>b.id)}),
         translateOne:block=>send(`/api/documents/${docId}/blocks/${block.id}/translate`,request),
-        onFallback:()=>{allowBatch=false;state.batchSize=1;persist('parallel-batch-size',1);$('#translation-batch-size').value=1;state.openMessage='合并翻译未返回完整格式，已自动切换为单段翻译…';updateControls();},
-        onBlock:result=>{const block=group.blocks.find(b=>b.id===result.id);Object.assign(block,result);done++;state.openMessage='';state.activeBlocks.delete(block.id);delete state.errors[block.id];invalidateLayout(true);pageTracker.mark(block.id);progress();}
+        onFallback:()=>{fallbackStreak++;if(fallbackStreak>=3)allowBatch=false;state.openMessage='合并翻译未返回完整格式，当前组改单段翻译…';},
+        onBatchAccepted:()=>{fallbackStreak=0;allowBatch=canBatch;},
+        onBlock:result=>{const block=group.blocks.find(b=>b.id===result.id);Object.assign(block,result);done++;failed.delete(block.id);state.openMessage='';state.activeBlocks.delete(block.id);delete state.errors[block.id];invalidateLayout(true);pageTracker.mark(block.id);progress(result.id);}
       }),
-      onStart:group=>{for(const block of group.blocks){state.activeBlocks.add(block.id);delete state.errors[block.id];}progress();},
-      onError:(group,error)=>{if(error.cancelled)return;for(const block of group.blocks)if(state.activeBlocks.has(block.id))state.errors[block.id]=error.message;if(!failure){failure=error.message;state.stop=true;toast(error.message);}},
-      onSettled:group=>{for(const block of group.blocks)state.activeBlocks.delete(block.id);progress();}
+      onStart:group=>{for(const block of group.blocks){state.activeBlocks.add(block.id);delete state.errors[block.id];}if(state.view==='paragraph'&&!state.pendingOpen)for(const block of group.blocks)updateCard(block.id);progress();},
+      onError:(group,error)=>{if(error.cancelled)return;for(const block of group.blocks)if(state.activeBlocks.has(block.id)){state.errors[block.id]=error.message;failed.add(block.id);}if(!failure){failure=error.message;toast(error.message);}if(error.fatal)fatal=true;},
+      onSettled:group=>{for(const block of group.blocks)state.activeBlocks.delete(block.id);if(state.view==='paragraph'&&!state.pendingOpen)for(const block of group.blocks)updateCard(block.id);progress();}
     });
     if(!failure)status(state.stop?`已暂停 · 本次完成 ${done} 段，可继续翻译`:`翻译完成 · 本次完成 ${done} 段`);
+    paused=state.stop;
   }finally{
+    paused=paused||state.stop;
     state.running=false;state.stop=false;state.activeBlocks.clear();updateControls();
     if(!state.pendingOpen){if(done)refreshLayout();else renderTranslations();}
     try{await refreshLibrary();}catch(error){toast(error.message);}
   }
+  // One bounded retry for isolated failures; a fatal/auth error or a paused
+  // run must not immediately repeat the same failing requests.
+  if(!retryPass && !paused && failed.size && !fatal){
+    const retryBlocks=blocks().filter(block=>failed.has(block.id) && !isTranslated(block));
+    if(retryBlocks.length){
+      await runTranslation(retryBlocks,true);
+      if(!Object.keys(state.errors).length){failure='';status('翻译完成 · 失败段落已重试成功');}
+    }
+  }
 }
 function formAgent(){const data=Object.fromEntries(new FormData($('#settings-form')));data.timeout=Number(data.timeout);return data;}
-function modeVisibility(){const custom=$('#agent-mode').value==='custom';$('#custom-fields').classList.toggle('hidden',!custom);$('#url-help').textContent=custom?'填写完整 POST 接口地址；目前支持非流式 JSON 响应。':'自动追加 /chat/completions，也可填写完整端点。';$('#settings-form [name=model]').required=!custom;const reasoning=$('#agent-reasoning');reasoning.disabled=custom;reasoning.title=custom?'自定义接口由请求模板控制':'';$('#reasoning-help').textContent=custom?'自定义接口模式下由请求模板决定是否思考，此处设置不生效。':'仅 OpenAI 兼容接口生效。服务端默认通常开启思考且强度为高；关闭可省时间与费用，调高会变慢并可能顶到超时。';}
+function modeVisibility(){const custom=$('#agent-mode').value==='custom';$('#custom-fields').classList.toggle('hidden',!custom);$('#url-help').textContent=custom?'填写完整 POST 接口地址；目前支持非流式 JSON 响应。':'自动追加 /chat/completions，也可填写完整端点。';$('#settings-form [name=model]').required=!custom;const reasoning=$('#agent-reasoning');reasoning.disabled=custom;reasoning.title=custom?'自定义接口由请求模板控制':'';$('#reasoning-help').textContent=custom?'自定义接口模式下由请求模板决定是否思考，此处设置不生效。':'仅 OpenAI 兼容接口生效。默认不发送思考参数；各服务商支持范围不同，不支持时请改回服务端默认。';}
 function showSettings(){
   for(const [key,value]of Object.entries(state.agent)){const input=$(`#settings-form [name="${key}"]`);if(input)input.value=value;}
   setKeyVisible(false);
@@ -749,8 +874,8 @@ if(!$('#target-language').value){state.target='简体中文';$('#target-language
 $('#home-target').innerHTML=$('#target-language').innerHTML;
 $('#home-target').value=state.target;
 $('#home-target').onchange=event=>{state.target=event.target.value;$('#target-language').value=state.target;persist('parallel-target',state.target);state.openMessage='';invalidateLayout();updateControls();};
-$('#target-language').onchange=event=>{state.target=event.target.value;$('#home-target').value=state.target;persist('parallel-target',state.target);invalidateLayout();renderTranslations();refreshLayout();status('目标语言已更新，开始翻译将处理缺少该语言译文的段落');};
-$('#translation-view').onchange=event=>{state.view=event.target.value;renderTranslations();pendingPaneScrolls.delete($('#source-pane'));synchronize('source');if(state.view==='pdf' && !state.layoutBusy && state.layoutKey!==layoutKey())refreshLayout();};
+$('#target-language').onchange=event=>{state.target=event.target.value;$('#home-target').value=state.target;persist('parallel-target',state.target);invalidateLayout();renderTranslations();if(blocks().some(isTranslated))refreshLayout();status('目标语言已更新，开始翻译将处理缺少该语言译文的段落');};
+$('#translation-view').onchange=event=>{state.view=event.target.value;renderTranslations();pendingPaneScrolls.delete($('#source-pane'));synchronize('source');if(state.view==='pdf' && !state.layoutBusy && state.layoutKey!==layoutKey() && blocks().some(isTranslated))refreshLayout();};
 $('#translation-edit').checked=false;
 $('#translation-edit').onchange=event=>{state.editTranslation=event.target.checked;getSelection()?.removeAllRanges();renderTranslations();};
 $('#translation-concurrency').value=state.concurrency;
@@ -770,33 +895,37 @@ $('#translation-pane').onclick=async event=>{
   if(button.dataset.action==='edit')showEdit(block);
   if(button.dataset.action==='copy'){try{await navigator.clipboard.writeText(block.translation);toast('已复制译文');}catch{toast('无法访问剪贴板，请手动选择译文复制');}}
 };
-$('#translation-pane').ondblclick=event=>{
-  const item=event.target.closest('.block-overlay');
-  if(state.editTranslation && !state.running){const target=item || event.target.closest('.translation-card');if(target)showEdit(blocks().find(block=>block.id===target.dataset.block));}
-};
 for(const side of ['source','translation']){
   const pane=$(`#${side}-pane`);
   pane.addEventListener('wheel',event=>readerWheel(event,side),{passive:false});
-  pane.addEventListener('pointerdown',event=>startReaderPan(event,side));
-  pane.addEventListener('pointerup',endReaderPan);
-  pane.addEventListener('pointercancel',endReaderPan);
-  pane.addEventListener('lostpointercapture',endReaderPan);
-  pane.addEventListener('click',event=>suppressPanClick(event,side),true);
-  pane.addEventListener('dblclick',event=>suppressPanClick(event,side),true);
+  pane.addEventListener('dblclick',event=>{
+    if(side==='translation' && state.editTranslation){
+      if(!state.running && !event.target.closest('[data-action],a')){
+        const target=event.target.closest('.block-overlay') || event.target.closest('.translation-card');
+        if(target)showEdit(blocks().find(block=>block.id===target.dataset.block));
+      }
+    }else selectReaderWord(event);
+  });
+  pane.addEventListener('copy',event=>copyReaderText(event,side));
   pane.addEventListener('scroll',scheduleReaderImages,{passive:true});
   pane.addEventListener('keydown',event=>readerKeydown(event,side));
   pane.addEventListener('pointerover',event=>{
-    if(readerViewport.pan?.moved)return;
     const item=event.target.closest('[data-block]');
     if(item){rememberBlockLane(item.dataset.block);hoverBlock(item.dataset.block);}
   });
   pane.addEventListener('pointermove',event=>{
-    if(moveReaderPan(event))return;
     readingInteraction.side=side;
+    const link=readerOverlayTarget(event,'.link-overlay');
+    for(const item of pane.querySelectorAll('.text-link-hover'))item.classList.remove('text-link-hover');
+    if(link)(link.closest('.link-group') || link).classList.add('text-link-hover');
     const page=event.target.closest('.pdf-page');
     if(page){const box=page.getBoundingClientRect();readingInteraction.lane=(event.clientX-box.left)/(box.width || 1);}
   });
-  pane.addEventListener('pointerout',event=>{if(!event.relatedTarget || !pane.contains(event.relatedTarget))hoverBlock(null);else if(!event.relatedTarget.closest('[data-block]'))hoverBlock(null);});
+  pane.addEventListener('pointerout',event=>{
+    if(!event.relatedTarget || !pane.contains(event.relatedTarget)){
+      hoverBlock(null);for(const item of pane.querySelectorAll('.text-link-hover'))item.classList.remove('text-link-hover');
+    }else if(!event.relatedTarget.closest('[data-block]')){hoverBlock(null);}
+  });
 }
 $('#sync-scroll').onchange=()=>{if($('#sync-scroll').checked){pendingPaneScrolls.delete($(`#${readingInteraction.side}-pane`));synchronize(readingInteraction.side);}};
 $('#source-pane').addEventListener('scroll',()=>synchronize('source'),{passive:true});
@@ -805,8 +934,6 @@ let resizeFrame;
 window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{
   refreshReaderViewport();
 });});
-window.addEventListener('pointerup',endReaderPan);
-window.addEventListener('blur',()=>{if(readerViewport.pan)endReaderPan({pointerId:readerViewport.pan.pointerId});});
 window.addEventListener('beforeunload',event=>{if(state.running){event.preventDefault();event.returnValue='';}});
 async function init(){try{const session=await api('/api/session');state.token=session.token;state.batchSupported=session.batch_translation===true;await refreshLibrary();updateAgentDot();}catch(error){toast(`初始化失败：${error.message}`);}}
 init();

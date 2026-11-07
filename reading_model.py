@@ -1,16 +1,21 @@
 """Model transport for the bounded Skill runner; translation transport is unchanged."""
 import json
+import re
 import httpx
 from fastapi import HTTPException
+
+PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
 
 
 def expand(value, variables):
     if isinstance(value, str):
-        for key, item in variables.items():
-            if value == '{{' + key + '}}':
-                return item
-            value = value.replace('{{' + key + '}}', item if isinstance(item, str) else json.dumps(item, ensure_ascii=False))
-        return value
+        match = PLACEHOLDER.fullmatch(value)
+        if match:
+            return variables.get(match[1], value)
+        def substitute(match):
+            item = variables.get(match[1], match[0])
+            return item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+        return PLACEHOLDER.sub(substitute, value)
     if isinstance(value, list):
         return [expand(v, variables) for v in value]
     if isinstance(value, dict):
@@ -40,9 +45,11 @@ async def invoke(service, config, messages, tools):
                       for part in msg['content'] if part.get('type') == 'image_url']
             if images and '{{images}}' not in config.template and '{{messages}}' not in config.template:
                 raise HTTPException(422, '自定义接口看图需在 JSON 模板中使用 {{images}} 或 {{messages}} 结构化变量')
-            body = expand(template, dict(model=config.model, target='简体中文', text='', images=images,
-                                        messages=messages, tools=tools,
-                                        prompt=protocol + '\n' + json.dumps(dict(messages=messages, tools=tools), ensure_ascii=False)))
+            variables = dict(model=config.model, target='简体中文', text='', images=images,
+                             messages=messages, tools=tools)
+            if '{{prompt}}' in config.template:
+                variables['prompt'] = protocol + '\n' + json.dumps(dict(messages=messages, tools=tools), ensure_ascii=False)
+            body = expand(template, variables)
             if not isinstance(body, dict):
                 raise ValueError()
         except (ValueError, TypeError):
@@ -88,6 +95,8 @@ async def invoke(service, config, messages, tools):
                     result = result[int(key)] if isinstance(result, list) else result[key]
             if isinstance(result, str):
                 result = json.loads(result.removeprefix('```json').removesuffix('```').strip())
+        if not isinstance(result, dict):
+            raise ValueError()
         content, calls = result.get('content') or '', result.get('tool_calls') or []
         if not isinstance(content, str) or len(content) > 60000 or not isinstance(calls, list) or len(calls) > 12:
             raise ValueError()

@@ -21,9 +21,20 @@ PyMuPDF 的发行包声明采用 GNU AGPL v3 / Artifex 商业双授权。使用�
 
 ## Other dependencies / 其他依赖
 
-Transitive dependencies, including the other packages in `requirements-lock.txt`, retain their package-specific licenses. Their distributions include authoritative license and copyright files. Dependencies are installed from Python packages rather than vendored into this source archive.
+Transitive dependencies, including the other packages in `requirements-lock.txt`, retain their package-specific licenses. Their distributions include authoritative license and copyright files. Python dependencies are installed from their packages.
 
-间接依赖（包括 `requirements-lock.txt` 中的其他包）保留各自许可。具体条款及版权声明以各包发行文件为准。源码包不捆绑虚拟环境或第三方库副本，运行时通过 Python 包安装。
+间接依赖（包括 `requirements-lock.txt` 中的其他包）保留各自许可。具体条款及版权声明以各包发行文件为准。Python 依赖由包管理器安装。
+
+## Paper assistant / 论文助手
+
+These reading guides and browser assets are distributed with the application and served locally.
+
+| Component | License and attribution |
+| --- | --- |
+| [paper-reading-guide](https://github.com/fuxiao13/paper-reading-guide) | MIT, © 2026 拂晓 (fu xiao). The contribution includes the upstream [license](skills/paper-reading-guide/LICENSE) and [source manifest with SHA-256 hashes](skills/paper-reading-guide/UPSTREAM.json). |
+| [marked](https://github.com/markedjs/marked) 15.0.12 | MIT. [Bundled license](static/vendor/marked-LICENSE) |
+| [DOMPurify](https://github.com/cure53/DOMPurify/releases/tag/3.4.17) 3.4.17 | Cure53 and contributors. [Apache-2.0](static/vendor/purify-LICENSE) or [MPL-2.0](static/vendor/purify-LICENSE-MPL). |
+| [KaTeX](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) 0.18.2 | The renderer uses the [MIT license](static/vendor/katex/LICENSE). The packaged math fonts carry separate copyright and reserved-name notices under the [SIL Open Font License 1.1](static/vendor/katex/fonts/OFL.txt). |
 
 ## Fonts / 字体
 
@@ -36,12 +47,3 @@ No system font files are redistributed in this repository. The app may read loca
 Input PDFs, their content, translations, and third-party AI services are not licensed by this notice. This archive does not include personal papers, translations, credentials, or local development screenshots.
 
 输入 PDF、文档内容、译文及第三方 AI 服务不因本说明而获得授权。源码包不包含私人论文、译文、密钥或本机开发截图。
-
-## Bundled paper-reading Skill and browser renderers
-
-- `skills/paper-reading-guide`: paper-reading-guide by 拂晓 (fu xiao), Copyright (c) 2026, MIT. Imported from the user's local upstream archive; original files and license are preserved. `UPSTREAM.json` records source and SHA-256 hashes; no unverifiable commit is claimed. Source: https://github.com/fuxiao13/paper-reading-guide
-- `static/vendor/marked.js`: marked 15.0.12, MIT; license in `static/vendor/marked-LICENSE`. Source: https://github.com/markedjs/marked
-- `static/vendor/purify.js`: DOMPurify 3.2.6, Apache-2.0 OR MPL-2.0; upstream notice in `static/vendor/purify-LICENSE`. Source: https://github.com/cure53/DOMPurify
-- `static/vendor/katex`: KaTeX 0.16.22 (including its packaged math fonts), MIT; upstream license in that directory. Source: https://github.com/KaTeX/KaTeX
-
-These browser assets are served locally; rendering reading responses does not load a public CDN. The earlier statement about not redistributing system fonts does not exclude KaTeX's bundled mathematical fonts.
