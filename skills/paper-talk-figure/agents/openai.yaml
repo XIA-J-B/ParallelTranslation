@@ -1,0 +1,4 @@
+interface:
+  display_name: "论文组会绘图"
+  short_description: "从论文证据到组会讲解图，完成构图、生成、审查、修订与版本保存"
+  default_prompt: "使用 $paper-talk-figure 阅读这篇论文，为组会制作一张中文方法讲解图，并保存原文依据、绘图方案和修订记录。"
