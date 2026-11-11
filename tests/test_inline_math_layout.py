@@ -1,10 +1,30 @@
+import io
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from functools import lru_cache
+from pathlib import Path
 
 import pymupdf
 
 import pdf_layout as layout
 from pdf_typography import font_resources
+
+
+@lru_cache(maxsize=2)
+def named_math_font(kind):
+    """Synthetic math faces with ordinary TeX names, independent of papers."""
+    from fontTools.ttLib import TTFont
+    name, filename = (("CMBX10", "KaTeX_Main-Bold.ttf") if kind == "bold" else
+                      ("CMMI7", "KaTeX_Math-Italic.ttf"))
+    path = Path(__file__).resolve().parents[1] / "static" / "vendor" / "katex" / "fonts" / filename
+    with TTFont(path) as font:
+        for record in font["name"].names:
+            if record.nameID in {1, 3, 4, 6, 16}:
+                record.string = name.encode(record.getEncoding())
+        buffer = io.BytesIO()
+        font.save(buffer)
+    return buffer.getvalue()
 
 
 class InlineMathLayoutTests(unittest.TestCase):
@@ -31,6 +51,19 @@ class InlineMathLayoutTests(unittest.TestCase):
             self.assertLess(asset["height"], 11)
             self.assertAlmostEqual(float(root.get("width")) / asset["width"], 6)
 
+    def test_asset_baseline_uses_the_base_instead_of_a_raised_accent(self):
+        with pymupdf.open() as pdf:
+            page = pdf.new_page()
+            page.insert_font(fontname="boldmath", fontbuffer=named_math_font("bold"))
+            page.insert_text((50, 77), "˙", fontsize=10, fontname="boldmath")
+            page.insert_text((50, 80), "x", fontsize=10, fontname="boldmath")
+            chars = [{**char, "size": span["size"], "font": span["font"]}
+                     for block in page.get_text("rawdict")["blocks"] for line in block["lines"]
+                     for span in line["spans"] for char in span["chars"]]
+            asset = layout.inline_math_assets(page, [layout._inline_math_run(chars, True)])[0]
+            _, top, _, height = map(float, ET.fromstring(asset["svg"]).get("viewBox").split())
+            self.assertAlmostEqual(top + height - asset["descent"], 80, places=4)
+
     def test_markup_matches_whole_variables_and_keeps_unmatched_text(self):
         with pymupdf.open() as pdf:
             asset = self.asset_fixture(pdf.new_page())
@@ -40,6 +73,87 @@ class InlineMathLayoutTests(unittest.TestCase):
             self.assertEqual(markup.count("<img"), 1)
             self.assertEqual(labels, ["x_0"])
             self.assertEqual(plain, "保留 ax0，变量  的说明。")
+
+    def test_accents_and_script_braces_match_as_one_complete_expression(self):
+        with pymupdf.open() as pdf:
+            base = self.asset_fixture(pdf.new_page())
+            for source, variants in (("˙xn", ("ẋ_n", "ẋ_{n}", "˙x_n")),
+                                     ("¨x", ("ẍ", "ẍ", "¨x"))):
+                for spelling in variants:
+                    with self.subTest(source=source, spelling=spelling):
+                        asset = {**base, "normalized": layout.normalized_inline_math(source)}
+                        value = "其中 " + spelling + " 为状态变化。"
+                        markup, plain, labels, _ = layout.inline_math_markup(value, [asset], pymupdf.Archive())
+                        self.assertEqual(labels, [spelling])
+                        self.assertEqual(plain, "其中  为状态变化。")
+                        self.assertEqual(markup.count("<img"), 1)
+                        self.assertNotIn("_", markup)
+                        self.assertNotIn("}", markup)
+
+    def test_single_variable_never_consumes_an_accented_base_or_orphan_script(self):
+        with pymupdf.open() as pdf:
+            base = self.asset_fixture(pdf.new_page())
+            for needle, spelling in (("x", "ẋ"), ("x", "ẋ"), ("n", "ẋ_n"),
+                                     ("n", "x_{n}"), ("x", "αx")):
+                asset = {**base, "normalized": needle}
+                markup, plain, labels, _ = layout.inline_math_markup(spelling, [asset], pymupdf.Archive())
+                self.assertFalse(labels, (needle, spelling))
+                self.assertEqual(plain, spelling)
+
+    def test_bold_accented_variables_are_math_but_bold_prose_is_not(self):
+        for value in ("˙x", "¨x", "ẋ", "ẋ", "˙"):
+            self.assertTrue(layout._inline_math_font("CMBX10", value), value)
+            self.assertTrue(layout._inline_math_primary("CMBX10", value), value)
+        for value in ("The", "Method", "velocity"):
+            self.assertFalse(layout._inline_math_font("CMBX10", value), value)
+
+    def test_accented_variable_glyphs_survive_columns_sizes_and_rotations(self):
+        for columns, rotation, size in ((1, 0, 10), (2, 90, 10), (2, 180, 11), (1, 270, 9)):
+            with self.subTest(columns=columns, rotation=rotation, size=size), tempfile.TemporaryDirectory() as temp:
+                with pymupdf.open() as source:
+                    page = source.new_page(width=680, height=500)
+                    page.insert_font(fontname="boldmath", fontbuffer=named_math_font("bold"))
+                    page.insert_font(fontname="scriptmath", fontbuffer=named_math_font("italic"))
+                    for column in range(columns):
+                        left = 35 + column * 330
+                        for row, accent in enumerate(("˙", "¨")):
+                            baseline = 90 + row * 55
+                            prefix = "The rate of the state is "
+                            page.insert_text((left, baseline), prefix, fontsize=size, fontname="tiro")
+                            x = left + pymupdf.get_text_length(prefix, fontsize=size, fontname="tiro")
+                            page.insert_text((x + size * .1, baseline), accent, fontsize=size, fontname="boldmath")
+                            page.insert_text((x, baseline), "x", fontsize=size, fontname="boldmath")
+                            if row == 0:
+                                page.insert_text((x + size * .5, baseline + size * .2), "n",
+                                                 fontsize=size * .7, fontname="scriptmath")
+                            page.insert_text((x + size * 1.3, baseline), " for this model.", fontsize=size, fontname="tiro")
+                    page.set_rotation(rotation)
+                    blocks = []
+                    for index, native in enumerate(page.get_text("dict")["blocks"]):
+                        if native["type"] != 0:
+                            continue
+                        text = " ".join("".join(span["text"] for span in line["spans"]) for line in native["lines"])
+                        box = pymupdf.Rect(native["bbox"]) * page.rotation_matrix
+                        variable = "ẋ_{n}" if "˙" in text else "ẍ"
+                        blocks.append({"id": f"variable-{index}", "text": text, "translation":
+                                       "其中 " + variable + " 表示当前状态的变化，用于控制器的计算。",
+                                       "target": "简体中文", "bbox": [box.x0 / page.rect.width, box.y0 / page.rect.height,
+                                                                         box.x1 / page.rect.width, box.y1 / page.rect.height]})
+                    path = Path(temp) / "source.pdf"
+                    source.save(path)
+                output, report = layout.typeset(path, {"pages": [{"number": 1, "blocks": blocks}]}, "简体中文")
+                self.assertFalse(report["issues"], report["issues"])
+                expected = [layout.normalized_inline_math("ẋn"), layout.normalized_inline_math("ẍ")] * columns
+                matched = [label for item in report["inline_math"] for label in item["matched"]]
+                self.assertCountEqual(matched, expected)
+                with pymupdf.open(stream=output, filetype="pdf") as pdf:
+                    self.assertEqual(pdf[0].rotation, rotation)
+                    visible = "".join(chr(c[0]) for trace in pdf[0].get_texttrace() if trace["type"] != 3
+                                      for c in trace["chars"])
+                    self.assertNotIn("_", visible)
+                    self.assertNotIn("¨", visible)
+                    self.assertNotIn("˙", visible)
+                    self.assertEqual(len(pdf[0].get_image_info()), 2 * columns)
 
     def math_run(self, text):
         chars = [{"c": char, "bbox": [50 + index * 5, 50, 54 + index * 5, 60],

@@ -1,4 +1,9 @@
+import copy
+import json
 import unittest
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import app as service
 from pdf_continuation import continuation_map, continuation_pairs
@@ -77,6 +82,92 @@ class ContinuationDetectionTests(unittest.TestCase):
         hints = continuation_map(two_column_document())
         self.assertTrue(hints["p1-l2"]["continues"])
         self.assertEqual(hints["p1-r1"]["continues_from"], "p1-l2")
+        self.assertEqual(hints["p1-l2"]["continues_to"], "p1-r1")
+
+    def test_page_continuation_can_resume_below_a_float_but_not_a_new_heading(self):
+        document = {"pages": [page(1, [block("head", LONG, [.1, .7, .9, .92])]),
+                              page(2, [block("plot", "0 1 2 3", [.1, .06, .9, .25]),
+                                       block("caption", "Fig. 2. Measured response.", [.1, .27, .9, .32]),
+                                       block("tail", CONTINUATION, [.1, .34, .9, .5])])]}
+        self.assertEqual(continuation_map(document)["tail"]["continues_from"], "head")
+        document["pages"][1]["blocks"].insert(2, block("heading", "A new section", [.1, .325, .9, .34]))
+        self.assertNotIn("tail", continuation_map(document))
+
+    def test_no_pair_across_a_page_without_prose_or_an_unexplained_top_gap(self):
+        document = {"pages": [page(1, [block("head", LONG, [.1, .7, .9, .92])]),
+                              page(2, []), page(3, [block("tail", CONTINUATION, [.1, .07, .9, .3])])]}
+        self.assertEqual(continuation_pairs(document), [])
+        document["pages"].pop(1)
+        document["pages"][1]["blocks"].insert(0, block("unrelated", "Page header", [.1, .07, .9, .09]))
+        document["pages"][1]["blocks"][1]["bbox"] = [.1, .4, .9, .6]
+        self.assertEqual(continuation_pairs(document), [])
+
+    def test_legacy_reference_block_with_an_embedded_number_is_not_prose(self):
+        from pdf_continuation import _prose_block
+        item = block("legacy", LONG + '\n[27] A. Example, "Another title', [.1, .7, .5, .9])
+        self.assertFalse(_prose_block(item))
+        item['text'] = LONG + '\n[27]. The evidence is discussed in the following paragraph.'
+        self.assertTrue(_prose_block(item))
+
+    def test_ligature_at_the_start_of_a_page_continuation_is_comparison_only(self):
+        document = {"pages": [page(1, [block("head", LONG, [.1, .7, .9, .92])]),
+                              page(2, [block("tail", 'ﬁles contain inertial properties and are used by the simulator to describe the vehicles',
+                                             [.1, .07, .9, .2])])]}
+        before = copy.deepcopy(document)
+        self.assertEqual(continuation_map(document)["tail"]["continues_from"], "head")
+        self.assertEqual(document, before)
+
+    def test_context_exposes_both_boundaries_without_foreign_language_translation(self):
+        document = two_column_document()
+        request = service.TranslateRequest(agent=service.AgentConfig(), target="简体中文")
+        blocks = service.all_blocks(document)
+        head = next(i for i, item in enumerate(blocks) if item["id"] == "p1-l2")
+        tail = next(i for i, item in enumerate(blocks) if item["id"] == "p1-r1")
+        context = service.continuation_context(document, head, request)
+        self.assertTrue(context["continues"])
+        self.assertEqual(context["next_source_head"], blocks[tail]["text"])
+        self.assertEqual(context["next_block_id"], blocks[tail]["id"])
+        blocks[head].update(translation="ancienne traduction", target="Français")
+        self.assertEqual(service.continuation_context(document, tail, request)["previous_translation_tail"], "")
+        before = copy.deepcopy(document)
+        snapshot = service.document_snapshot(document)
+        self.assertEqual(document, before)
+        self.assertNotIn("continuations", document)
+        self.assertEqual(snapshot["continuations"]["p1-r1"]["continues_from"], "p1-l2")
+
+    def test_saved_predecessor_result_is_used_by_the_successor_request(self):
+        document = two_column_document()
+        document["id"] = "a" * 32
+        agent = AsyncMock(side_effect=["此项依赖于调节", "控制器参数来完成。"])
+        request = service.TranslateRequest(agent=service.AgentConfig())
+        with patch.object(service, "load_doc", return_value=document), patch.object(service, "doc_dir", return_value=Path('.')), \
+                patch.object(service, "save_doc"), patch.object(service, "invoke_agent", agent):
+            asyncio.run(service.translate(document["id"], "p1-l2", request))
+            asyncio.run(service.translate(document["id"], "p1-r1", request))
+        prompt = agent.await_args_list[1].args[1]
+        context = json.loads(prompt.split('以下 JSON 为待翻译内容与参考资料：\n')[1])
+        self.assertEqual(context["previous_translation_tail"], "此项依赖于调节")
+        self.assertEqual(context["previous_block_id"], "p1-l2")
+
+    def test_batch_context_keeps_fragment_boundaries_on_each_item(self):
+        document = two_column_document()
+        document['id'] = 'a' * 32
+        ids = ['p1-l2', 'p1-r1']
+        agent = AsyncMock(return_value=json.dumps({'blocks': [
+            {'id': key, 'translation': '片段译文'} for key in ids]}))
+        with patch.object(service, 'load_doc', return_value=document), patch.object(service, 'doc_dir', return_value=Path('.')), \
+                patch.object(service, 'save_doc'), patch.object(service, 'invoke_agent', agent):
+            asyncio.run(service.translate_batch(document['id'], service.BatchTranslateRequest(
+                agent=service.AgentConfig(), block_ids=ids)))
+        context = json.loads(agent.await_args.args[1].split('参考资料与本次待翻译段落：\n')[1])
+        self.assertNotIn('continues', context)
+        self.assertNotIn('next_source_head', context)
+        first, second = context['current_blocks']
+        self.assertTrue(first['continues'])
+        self.assertEqual(first['next_block_id'], second['id'])
+        self.assertTrue(second['continuation'])
+        self.assertEqual(second['previous_block_id'], first['id'])
+        self.assertEqual(second['previous_translation_tail'], '译文')
 
     def test_prompt_context_carries_previous_source_and_translation(self):
         document = two_column_document()

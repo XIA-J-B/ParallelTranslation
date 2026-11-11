@@ -41,12 +41,12 @@ if(typeof module!=='undefined')module.exports=GuidedReadingModel;
 
 if(typeof window!=='undefined') {
   const legacy=globalThis.PaperAssistant, legacyToggle=$('#assistant-toggle').onclick;
-  const panel=document.createElement('aside');panel.id='guided-reading';panel.className='guided-reading hidden';panel.setAttribute('aria-label','Skill 论文陪读');
+  const panel=document.createElement('aside');panel.id='guided-reading';panel.className='guided-reading hidden';panel.setAttribute('aria-label','AI 助读');
   $('.reading-workspace').append(panel);
   const nav=document.createElement('aside');nav.id='reading-directory';$('.reading-workspace').prepend(nav);
-  const controls=document.createElement('div');controls.id='reader-view-switch';controls.innerHTML='<button data-reader-view="source">仅原文</button><button data-reader-view="both" class="active">原文译文</button><button data-reader-view="translation">仅译文</button>';
+  const controls=document.createElement('div');controls.id='reader-view-switch';controls.setAttribute('role','group');controls.setAttribute('aria-label','显示内容');controls.innerHTML='<button data-reader-view="source" title="只看原文">原文</button><button data-reader-view="both" class="active" title="原文和译文左右对照">对照</button><button data-reader-view="translation" title="只看译文">译文</button>';
   $('.reader-toolbar').insertBefore(controls,$('#assistant-toggle'));
-  const directoryButton=document.createElement('button');directoryButton.className='button subtle';directoryButton.textContent='目录';directoryButton.id='directory-toggle';$('.reader-toolbar').insertBefore(directoryButton,$('#document-name'));
+  const directoryButton=document.createElement('button');directoryButton.className='button subtle';directoryButton.innerHTML='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg><span class="button-label">目录</span>';directoryButton.setAttribute('aria-label','目录');directoryButton.title='目录';directoryButton.id='directory-toggle';$('.reader-toolbar').insertBefore(directoryButton,$('#document-name'));
   controls.onclick=e=>{const view=e.target.closest('[data-reader-view]')?.dataset.readerView;if(view){g.view=view;layout();}};
   directoryButton.onclick=()=>{g.directory=!g.directory;layout();};
   nav.onclick=async e=>{if(e.target.closest('[data-guide-action=directory]')){g.directory=false;layout();return;}const item=e.target.closest('[data-outline]');if(!item)return;const entry=(g.data?.structure?.outline?.items||g.outline.items)[Number(item.dataset.outline)];showSource({doc_id:state.doc.id,...entry});if(g.data){const match=g.data.structure.units.find(u=>u.page===entry.page&&(u.title===entry.title||u.source.block_id===entry.block_id));if(match)await mutate(()=>update({unit_id:match.id}));}};
@@ -109,7 +109,7 @@ if(typeof window!=='undefined') {
   }
   function notesHTML() {
     if(g.note)return `<div class="guide-note-heading">${button('note-list','返回笔记列表')}<h2>${escape(g.note.title)}</h2><small>收藏于 ${escape(new Date(g.note.created).toLocaleString())}</small><div class="guide-note-actions"><a class="button secondary" href="${base()}/notes/${g.note.id}/download" download>导出 Markdown</a><button class="button secondary" data-delete-note="${g.note.id}" ${g.busy?'disabled':''}>删除笔记</button></div></div>${turnHTML(g.note.turn,g.note.sources,g.note.id)}`;
-    return '<h2 class="guide-notes-title">本篇论文的笔记</h2>'+(g.notes.length?g.notes.map(n=>`<button class="guide-note-entry" data-open-note="${n.id}"><strong>${escape(n.title)}</strong><small>${escape(new Date(n.created).toLocaleString())}</small><p>${escape(n.preview)}</p></button>`).join(''):'<p class="guide-welcome">点击回答下方的“收藏为笔记”，即可在这里查看和导出。</p>');
+    return '<h2 class="guide-notes-title">这篇论文的笔记</h2>'+(g.notes.length?g.notes.map(n=>`<button class="guide-note-entry" data-open-note="${n.id}"><strong>${escape(n.title)}</strong><small>${escape(new Date(n.created).toLocaleString())}</small><p>${escape(n.preview)}</p></button>`).join(''):'<p class="guide-welcome">在回答下面点「收藏为笔记」，它就会出现在这里，也能导出成 Markdown。</p>');
   }
   function annotationEntries() {
     const highlights=globalThis.OriginalTextSelection?.highlights?.() || [];
@@ -137,6 +137,7 @@ if(typeof window!=='undefined') {
     const reader=$('#reader');reader.classList.add('reading-shell');reader.classList.toggle('guided-open',g.open);reader.classList.toggle('directory-open',g.directory);$('#reading-directory').classList.toggle('hidden',!g.directory);$$('[data-reader-view]').forEach(b=>b.classList.toggle('active',b.dataset.readerView===g.view));
     reader.dataset.guideView=g.view;reader.style.setProperty('--guide-width',g.width+'px');
     $('#assistant-toggle').setAttribute('aria-expanded',String(g.open));
+    directoryButton.setAttribute('aria-pressed',String(g.directory));
     window.dispatchEvent(new Event('resize'));
   }
   function show(open) {
@@ -195,14 +196,14 @@ if(typeof window!=='undefined') {
       <div id="guide-notice" role="status"></div>
       <div class="guide-conversation" aria-label="助读对话">
       ${g.tab==='notes'?notesHTML():g.tab==='annotations'?annotationsHTML():`${old?'<p class="assistant-warning">此会话保留旧版 Skill。请在更多菜单归档并新建，使用规范阅读方式。</p>':''}
-      ${!data?.messages.length?'<div class="guide-welcome"><p>选中原文，解释一句话，或引用多段文字一起讨论。</p><p class="assistant-meta">选择文章速读或逐节陪读，按 Skill 阅读。</p></div>':''}
+      ${!data?.messages.length?'<div class="guide-welcome"><p>在原文或译文里选中文字，可以让它翻译、解释，或者引用几段一起提问。</p><p class="assistant-meta">「文章速读」先把全文过一遍；「逐节陪读」按章节一节一节往下读。</p></div>':''}
       ${(data?.messages||[]).map(t=>turnHTML(t,data.sources)).join('')}`}
       </div>
       <div class="guide-composer ${g.tab!=='conversation'&&!job?'hidden':''}">
       ${job?`<div class="guide-working" role="status"><div>${escape(job.stage||'准备中')} ${button('stop','停止')}</div>
       <progress max="100" ${progress&&(prepared?.phase==='preparing'||progress.total_chunks)?`value="${progress.percent}"`:''} aria-label="文章分析进度"></progress>
       ${prepared?.prepared_pages!==undefined?`<small>页面图已准备 ${prepared.prepared_pages}/${prepared.total_pages} 页${prepared.round?` · 补读与核查第 ${prepared.round}/${prepared.max_rounds} 轮`:''}</small>`:prepared?.round?`<small>补读与核查第 ${prepared.round}/${prepared.max_rounds} 轮</small>`:progress?.total_chunks?`<small>已分析 ${progress.completed_chunks}/${progress.total_chunks} 块</small>`:'<small>正在处理，请稍候…</small>'}</div>`:''}
-      ${g.tab==='conversation'?`<div class="guide-composer-box"><div id="guide-selection"></div><form id="guide-form"><textarea id="guide-question" rows="2" maxlength="4000" placeholder="问一个问题，或引用选中的文字…" aria-label="助读问题">${escape(g.draft)}</textarea><div class="guide-sendbar"><small>通过 Skill 回答 · ${escape(state.agent.model||'请配置模型')}</small><button class="button primary" aria-label="发送问题" ${disabled||composerOld?'disabled':''}>↑</button></div></form></div>`:''}</div>`;
+      ${g.tab==='conversation'?`<div class="guide-composer-box"><div id="guide-selection"></div><form id="guide-form"><textarea id="guide-question" rows="2" maxlength="4000" placeholder="问一个问题，或引用选中的文字…" aria-label="助读问题">${escape(g.draft)}</textarea><div class="guide-sendbar"><small>模型：${escape(state.agent.model||'未设置')}</small><button class="button primary" aria-label="发送问题" ${disabled||composerOld?'disabled':''}>↑</button></div></form></div>`:''}</div>`;
     const last=Object.values(data?.jobs||{}).at(-1);
     if(last&&['failed','interrupted','cancelled','limited'].includes(last.status))$('#guide-notice').innerHTML=`<p class="assistant-warning">${escape(last.error||'本轮尚未完成')} ${button('retry','重试',disabled)}</p>`;
     selectionPreview();renderDirectory();
@@ -343,11 +344,13 @@ if(typeof window!=='undefined') {
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&g.crop){g.crop=false;$('#reader').classList.remove('quote-cropping');drag=null;toast('已取消框选');}});
   $('#assistant-toggle').onclick=()=>show(!g.open);
   globalThis.PaperAssistant={
-    async addCitations(quotes,explain){
+    async addCitations(quotes,action){
+      // Keep callers from the existing reader compatible with the action UI.
+      if(action===true)action='explain';
       const epoch=g.epoch;g.tab='conversation';g.note=null;g.selection=null;clearBlockSelection();
       for(const c of quotes){if(!g.citations.some(x=>x.id===c.id))g.citations.push(c);}
       const loading=show(true);
-      if(explain){await loading;if(epoch!==g.epoch)return;g.draft='请按 Skill 解释引用的文字，结合论文原文说明。';render();await submit('message');}
+      if(action==='translate' || action==='explain'){await loading;if(epoch!==g.epoch)return;g.draft=action==='translate'?`请将引用的文字翻译为${state.target}。`:'请按 Skill 解释引用的文字，结合论文原文说明。';render();await submit('message');}
       else {selectionPreview();panel.querySelector('#guide-question')?.focus();}
     },
     documentChanged(){legacy?.documentChanged();if(g.id!==state.doc?.id){g.epoch++;g.id=state.doc?.id;clearTimeout(g.timer);Object.assign(g,{data:null,draft:'',selection:null,citations:[],outline:null,busy:false,signature:'',restored:false,scroll:0,view:'both',tab:'conversation',notes:[],note:null});}layout();loadOutline();globalThis.OriginalTextSelection?.refresh();if(g.open){render();load();}},

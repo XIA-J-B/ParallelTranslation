@@ -6,6 +6,7 @@ Link checks report, per page, reader-report schema violations, dropped source
 URI/goto annotations and reader entries whose rectangle is not on their page.
 """
 import json
+import math
 import sys
 import unicodedata
 from collections import Counter
@@ -111,11 +112,82 @@ def check_reader_links(reader_links, page_count, errors):
             errors.append({"page": source_page, "kind": "reader_kind", "entry": entry})
 
 
-def audit():
-    output = ROOT / "tmp" / "source-layout-audit"
+def spacing_is_safe(adjustment, gap):
+    """Check reported geometry and the explicitly bounded column-fit policy."""
+    if abs(gap - adjustment["gap"]) > .1:
+        return False
+    ink_gap = adjustment.get("source_ink_gap")
+    if adjustment.get("spacing_reason") == "bounded-column-source-size":
+        factor = adjustment.get("gap_factor", float("nan"))
+        actual = gap + adjustment.get("ink_padding", float("nan"))
+        reported = adjustment.get("actual_ink_gap", float("nan"))
+        return (all(math.isfinite(value) for value in (factor, actual, reported))
+                and ink_gap is not None and .88 <= factor <= 1
+                and actual >= max(2, ink_gap * factor) - .1
+                and abs(actual - reported) <= .1)
+    return (gap + adjustment["ink_padding"] >= ink_gap - .1
+            if ink_gap is not None else gap >= adjustment["source_gap"] - .1)
+
+
+def expected_han(entries, original_ids, target, structured):
+    """Use the preflight target for reconstructed entries, never output text.
+
+    Legacy bibliography blocks can straddle two entries and contain translated
+    metadata which is deliberately retained in its source form. Cell/entry
+    plans describe the actual target independently of the rendered PDF.
+    """
+    structured_ids = {key for item in structured for key in item["blocks"]}
+    expected = han("".join(b["text"] if b["id"] in original_ids else b.get("translation", "")
+                           for b, _ in entries if b.get("target") == target
+                           and b["id"] not in structured_ids))
+    expected.update(han("".join(item.get("text", "") for item in structured)))
+    return expected
+
+
+def normalized_region(page, rectangle):
+    box = pymupdf.Rect(rectangle) * page.rotation_matrix
+    return pymupdf.Rect(box.x0 / page.rect.width, box.y0 / page.rect.height,
+                        box.x1 / page.rect.width, box.y1 / page.rect.height)
+
+
+def collision_regions(page, entries, structured):
+    """Audit individual cells/entries instead of their shared selection union.
+
+    A saved block may contain many separated table cells or the tail and head
+    of adjacent references. Its reader selection union is not painted ink.
+    Each constituent region is still checked against every other region and
+    every untouched source span using the same area threshold.
+    """
+    structured_ids = {key for item in structured for key in item["blocks"]}
+    result = [(b, box, [pymupdf.Rect(b["bbox"])]) for b, box in entries
+              if b["id"] not in structured_ids]
+    for index, item in enumerate(structured):
+        source = normalized_region(page, item["source"])
+        result.append(({"id": "/".join(item["blocks"]) + f":{index}", "bbox": list(source),
+                        "structured": True},
+                       normalized_region(page, item.get("painted_rect", item["rect"])), [source]))
+    return result
+
+
+def source_span_ink(span, operations):
+    """Intersect a font frame with real PDF paint bounds for dense labels."""
+    frame = pymupdf.Rect(span["bbox"])
+    parts = [frame & bounds for bounds in operations if frame.intersects(bounds)]
+    if not parts:
+        return frame
+    box = parts[0]
+    for part in parts[1:]:
+        box |= part
+    return box
+
+
+def audit(data_dir=None, output_dir=None, all_pages=False):
+    """Audit an isolated corpus when supplied; never require personal samples."""
+    output = Path(output_dir) if output_dir else ROOT / "tmp" / "source-layout-audit"
+    data = Path(data_dir) if data_dir else ROOT / ".data"
     output.mkdir(parents=True, exist_ok=True)
     results = []
-    for metadata in sorted((ROOT / ".data").glob("*/document.json")):
+    for metadata in sorted(data.glob("*/document.json")):
         document = json.loads(metadata.read_text(encoding="utf-8"))
         translated = [b for p in document["pages"] for b in p["blocks"] if b.get("translation")]
         if not translated:
@@ -130,24 +202,29 @@ def audit():
                   "link_errors": [], "adjusted_regions": len(report.get("flow", [])), "samples": []}
         reader_links = report.get("links") or []
         check_reader_links(reader_links, len(document["pages"]), result["link_errors"])
-        sample_pages = {0, 1, 2, len(document["pages"]) // 2, len(document["pages"]) - 1}
+        sample_pages = (set(range(len(document["pages"]))) if all_pages else
+                        {0, 1, 2, len(document["pages"]) // 2, len(document["pages"]) - 1})
         pdf_path = metadata.parent / "layout" / (report["revision"] + ".pdf")
         with pymupdf.open(pdf_path) as pdf, pymupdf.open(metadata.parent / "source.pdf") as original:
             for index, saved in enumerate(document["pages"]):
                 page = pdf[index]
                 entries = [(b, pymupdf.Rect(report["placements"][b["id"]])) for b in saved["blocks"]
                            if b["id"] in report["placements"]]
+                structured = [item for item in report.get("structured_regions", [])
+                              if item["page"] == saved["number"]]
                 source_groups = {}
-                for block, box in entries:
-                    source_groups.setdefault(tuple(box), []).append(pymupdf.Rect(block["bbox"]))
+                collision_entries = collision_regions(page, entries, structured)
+                for block, box, sources in collision_entries:
+                    source_groups.setdefault(tuple(box), []).extend(sources)
                 original_ids = set(report.get("original_placements", []))
-                expected = han("".join(b["text"] if b["id"] in original_ids else b.get("translation", "")
-                                       for b, _ in entries if b.get("target") == target))
+                expected = expected_han(entries, original_ids, target, structured)
                 erased = {tuple(box) for item in report.get("erased_spans", [])
                           if item["page"] == saved["number"] for box in item["boxes"]}
                 native = original[index].get_text("dict", flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)["blocks"]
                 fixed_spans = [span for item in native if item["type"] == 0 for line in item["lines"]
                                for span in line["spans"] if span["text"].strip() and tuple(span["bbox"]) not in erased]
+                source_ink = [pymupdf.Rect(bounds) for kind, bounds, *_ in original[index].get_bboxlog()
+                              if kind in {"fill-text", "stroke-text"}]
                 output_spans = [span for item in page.get_text("dict")["blocks"] if item["type"] == 0
                                 for line in item["lines"] for span in line["spans"] if han(span["text"])]
                 missing = expected - han(page.get_text())
@@ -168,7 +245,8 @@ def audit():
                                                                        pdf_layout.source_rect(original[index], block))
                             if source_style and not source_style["bold"]:
                                 result["bold_body"].append({"page": index + 1, "block": block["id"]})
-                    for other, other_box in entries[i + 1:]:
+                for i, (block, box, _) in enumerate(collision_entries):
+                    for other, other_box, _ in collision_entries[i + 1:]:
                         if box == other_box:
                             continue  # One merged paragraph or cover group owns both IDs.
                         area = pdf_layout.overlap(box, other_box) * page.rect.width * page.rect.height
@@ -177,7 +255,8 @@ def audit():
                         if area > 1 and source_overlap < 1e-6:
                             result["collisions"].append({"page": index + 1, "blocks": [block["id"], other["id"]], "area": round(area, 2)})
                     for fixed in fixed_spans:
-                        displayed = pymupdf.Rect(fixed["bbox"]) * original[index].rotation_matrix
+                        ink = source_span_ink(fixed, source_ink) if block.get("structured") else pymupdf.Rect(fixed["bbox"])
+                        displayed = ink * original[index].rotation_matrix
                         bounds = original[index].rect
                         fixed_box = pymupdf.Rect(displayed.x0 / bounds.width, displayed.y0 / bounds.height,
                                                 displayed.x1 / bounds.width, displayed.y1 / bounds.height)
@@ -191,10 +270,7 @@ def audit():
                     key = adjustment["blocks"][0]
                     actual = pdf_layout.source_rect(page, {"bbox": report["placements"][key]})
                     gap = actual.y0 - adjustment["previous_bottom"]
-                    ink_gap = adjustment.get("source_ink_gap")
-                    too_tight = (gap + adjustment["ink_padding"] < ink_gap - .1
-                                 if ink_gap is not None else gap < adjustment["source_gap"] - .1)
-                    if abs(gap - adjustment["gap"]) > .1 or too_tight:
+                    if not spacing_is_safe(adjustment, gap):
                         result["spacing_errors"].append({"page": index + 1, "block": key, "gap": gap, "expected": adjustment["gap"]})
                 for item in report.get("inline_math", []):
                     if item["page"] != saved["number"]:
@@ -287,4 +363,10 @@ def audit():
 
 
 if __name__ == "__main__":
-    raise SystemExit(audit())
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--data-dir', type=Path, help='Corpus directory containing document subdirectories')
+    parser.add_argument('--output-dir', type=Path, help='Audit report and screenshot directory')
+    parser.add_argument('--all-pages', action='store_true', help='Render every page instead of a sample')
+    args = parser.parse_args()
+    raise SystemExit(audit(args.data_dir, args.output_dir, args.all_pages))

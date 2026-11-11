@@ -15,6 +15,14 @@ def page_selection(page, *, native=None, citation_runs=None):
     matrix = page.rotation_matrix
     if native is None:
         native = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
+        from pdf_unicode import recover_page_text, invalid_text
+        native, _ = recover_page_text(page, native)
+        for block in native['blocks']:
+            for line in block.get('lines', ()):
+                for span in line.get('spans', ()):
+                    for char in span.get('chars', ()):
+                        if invalid_text(char.get('c', '')):
+                            char['c'] = '\ufffd'
     # Match PyMuPDF rawdict sort=True while retaining the same span objects as the citation extractor.
     for block in sorted(native["blocks"], key=lambda item: (item["bbox"][3], item["bbox"][0])):
         if block.get("type") != 0:
@@ -41,8 +49,11 @@ def page_selection(page, *, native=None, citation_runs=None):
                     if not (quad.rect * matrix).intersects(bounds) and not (width == 0 and bounds.contains(ul)):
                         continue
                     glyph = [text, *[round(value, 5) for value in (ul.x, ul.y, width, height, a, b, c, d)]]
-                    if citation_runs is not None and id(span) in citation_runs:
-                        glyph.extend([citation_runs[id(span)], start])
+                    if citation_runs is not None:
+                        if id(char) in citation_runs:
+                            glyph.extend(citation_runs[id(char)])
+                        elif id(span) in citation_runs:
+                            glyph.extend([citation_runs[id(span)], start])
                     characters.append(glyph)
             if characters:
                 lines.append(characters)

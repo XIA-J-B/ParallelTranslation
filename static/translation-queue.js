@@ -4,27 +4,57 @@
   async function run({items, concurrency=3, shouldStop=()=>false, translate,
     onStart=()=>{}, onSuccess=()=>{}, onError=()=>{}, onSettled=()=>{},
     maxConsecutiveFailures=3}){
-    let next=0, completed=0, failed=0, consecutive=0, halted=false;
+    let completed=0, failed=0, consecutive=0, halted=false, active=0;
     const limit=Math.min(items.length,Math.max(1,Math.min(12,Math.floor(Number(concurrency)) || 3)));
     const fatal=error=>Boolean(error && (error.fatal || error.status===401 || error.status===403));
+    const status=new Map(items.map(item=>[item,'pending']));
+    const pending=new Set(items);
+    const byId=new Map(items.filter(item=>item && item.id!==undefined).map(item=>[item.id,item]));
+    const waiting=new Set();
+    const wake=()=>{for(const resolve of waiting)resolve();waiting.clear();};
+    const dependencies=item=>(item?.dependsOn || []).map(id=>byId.get(id)).filter(item=>item!==undefined);
+    function nextReady(){
+      for(const item of pending)if(dependencies(item).every(dep=>
+        ['succeeded','failed'].includes(status.get(dep))))return item;
+    }
     async function worker(){
-      while(next<items.length && !halted && !shouldStop()){
-        const item=items[next++];
-        onStart(item);
+      while(!halted && !shouldStop()){
+        let item=nextReady();
+        if(item===undefined){
+          if(active){await new Promise(resolve=>waiting.add(resolve));continue;}
+          item=pending.values().next().value;
+          if(item===undefined)return;
+        }
+        const blocked=dependencies(item).some(dep=>status.get(dep)!=='succeeded');
+        pending.delete(item);status.set(item,'running');active++;
+        let callbackThrew=false;
+        const notify=(callback,...args)=>{
+          try{return callback(...args);}
+          catch(error){callbackThrew=true;halted=true;throw error;}
+        };
         try{
+          notify(onStart,item);
+          if(blocked)throw Object.assign(new Error('前一续写片段未完成，请恢复翻译后再继续此片段'),{dependency:true});
           const result=await translate(item);
-          onSuccess(item,result);completed++;consecutive=0;
+          notify(onSuccess,item,result);completed++;consecutive=0;status.set(item,'succeeded');
         }catch(error){
-          failed++;consecutive++;
+          if(callbackThrew){status.set(item,'failed');throw error;}
+          failed++;if(!error.dependency)consecutive++;status.set(item,'failed');
           // One malformed paragraph must not stop independent work. A burst of
           // failures or an authentication error is systemic, so stop scheduling
           // new groups while already-started requests are still drained.
           if(fatal(error) || consecutive>=maxConsecutiveFailures)halted=true;
-          onError(item,error);
-        }finally{onSettled(item);}
+          notify(onError,item,error);
+        }finally{
+          try{notify(onSettled,item);}finally{active--;wake();}
+        }
       }
     }
-    await Promise.all(Array.from({length:limit},worker));
+    // A UI callback can fail too. Stop scheduling, wake dependency waiters,
+    // and drain other requests before propagating that failure to the caller.
+    const results=await Promise.allSettled(Array.from({length:limit},worker));
+    const rejected=results.find(result=>result.status==='rejected');
+    if(rejected)throw rejected.reason;
     return {completed,failed,paused:shouldStop()};
   }
   function createPageTracker(pages,items,onComplete){
@@ -41,13 +71,20 @@
       if(!ids.size){pending.delete(number);onComplete(number);}
     }};
   }
-  function groupByPage(pages,items,size=5,maxCharacters=12000,longBlockCharacters=4000){
+  function groupByPage(pages,items,size=5,maxCharacters=12000,longBlockCharacters=4000,continuations={}){
     const selected=new Set(items.map(item=>item.id)),groups=[];
     for(const page of pages){
       let group=[],characters=0;
       const flush=()=>{if(group.length){groups.push({id:group[0].id,blocks:group});group=[];characters=0;}};
       for(const block of page.blocks){
         if(!selected.has(block.id))continue;
+        // Keep each continuation fragment in its own request, so its successor
+        // can use the saved result even across pages or reversed extraction order.
+        const hint=continuations[block.id];
+        if(hint?.continues || hint?.continues_from){
+          flush();groups.push({id:block.id,blocks:[block],
+            dependsOn:selected.has(hint.continues_from)?[hint.continues_from]:[]});continue;
+        }
         const length=(block.text||'').length;
         // A very long paragraph can dominate a merged response; let it run on
         // its own worker instead of delaying several short paragraphs.

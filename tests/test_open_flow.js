@@ -133,8 +133,21 @@ test('translations in another language do not count toward completion',async()=>
 });
 test('missing configuration and image-only documents stay in the library',async()=>{
   const r=workspace();r.eval("state.agent.model=''");await r.eval('prepareDocument()');
-  assert.equal(r.requests.length,0);assert.match(r.element('#open-status').textContent,/配置 Agent/);
+  assert.equal(r.requests.length,0);assert.match(r.element('#open-status').textContent,/模型设置/);
   const scan=workspace({empty:true});await scan.eval('prepareDocument()');
   assert.equal(scan.requests.length,0);assert.match(scan.element('#open-status').textContent,/OCR/);
   assert.equal(scan.element('#open-action').disabled,true);
+});
+
+test('document continuation hints reach scheduling before a dependent model request starts',async()=>{
+  const r=workspace();
+  r.eval("state.concurrency=3;state.batchSupported=true;state.doc.pages[0].blocks.reverse();state.doc.continuations={a:{continues:true,continues_to:'b'},b:{continues_from:'a'}}");
+  const job=r.eval('prepareDocument()');
+  assert.equal(r.requests.length,1);assert.match(r.requests[0].path,/blocks\/a\/translate$/);
+  await finishBlock(r,0,'a');
+  assert.match(r.requests[1].path,/blocks\/b\/translate$/);
+  assert.equal(r.eval("blocks().find(b=>b.id==='a').translation"),'译文');
+  await finishBlock(r,1,'b');r.requests[2].resolve([]);await tick();
+  r.requests[3].resolve({revision:'ready',issues:[]});await job;
+  assert.deepEqual(r.opened,[true]);
 });

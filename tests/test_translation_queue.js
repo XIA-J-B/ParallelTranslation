@@ -164,3 +164,119 @@ test('authentication failures do not trigger fallback or extra requests',async()
     translateBatch:async()=>{throw new Error('认证失败');},translateOne:()=>assert.fail('unexpected request'),
     onFallback:()=>assert.fail('unexpected fallback'),onBlock:()=>{}}),/认证失败/);
 });
+
+test('continuations are isolated and wait for the saved predecessor despite reversed page order',async()=>{
+  const head={id:'head',text:'unfinished sentence'},tail={id:'tail',text:'continued sentence'},other={id:'other',text:'independent'};
+  const pages=[{number:1,blocks:[tail,other,head]}];
+  const hints={head:{continues:true,continues_to:'tail'},tail:{continues_from:'head'}};
+  const groups=groupByPage(pages,[head,tail,other],5,12000,4000,hints);
+  assert.deepEqual(groups.map(group=>group.blocks.map(block=>block.id)),[['tail'],['other'],['head']]);
+  const started=[],saved=[];let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const job=run({items:groups,concurrency:2,translate:async group=>{
+    started.push(group.id);
+    if(group.id==='head')await gate;
+    if(group.id==='tail')assert.ok(saved.includes('head'));
+    return group.id;
+  },onSuccess:(group)=>saved.push(group.id)});
+  await tick();assert.deepEqual(started,['other','head']);
+  release();assert.equal((await job).completed,3);assert.deepEqual(started,['other','head','tail']);
+});
+
+test('saved predecessors outside the selected work do not block resumed continuations',async()=>{
+  const head={id:'head',text:'head'},tail={id:'tail',text:'tail'};
+  const groups=groupByPage([{number:1,blocks:[head]},{number:2,blocks:[tail]}],[tail],5,12000,4000,
+    {head:{continues:true},tail:{continues_from:'head'}});
+  assert.deepEqual(groups[0].dependsOn,[]);
+  assert.equal((await run({items:groups,translate:async()=>{}})).completed,1);
+});
+
+test('a failed predecessor defers its continuation without calling the provider or stopping independent work',async()=>{
+  const calls=[],errors=[];
+  const result=await run({items:[{id:'tail',dependsOn:['head']},{id:'head'},{id:'other'}],concurrency:2,
+    translate:async item=>{calls.push(item.id);if(item.id==='head')throw new Error('provider unavailable');},
+    onError:(item,error)=>errors.push([item.id,Boolean(error.dependency)])});
+  assert.deepEqual(calls,['head','other']);
+  assert.deepEqual(errors,[['head',false],['tail',true]]);
+  assert.deepEqual(result,{completed:1,failed:2,paused:false});
+});
+
+test('pausing while a dependency runs drains its saved result but never starts its continuation',async()=>{
+  let stop=false,release;const calls=[],saved=[];
+  const gate=new Promise(resolve=>{release=resolve;});
+  const job=run({items:[{id:'tail',dependsOn:['head']},{id:'head'}],concurrency:2,shouldStop:()=>stop,
+    translate:async item=>{calls.push(item.id);await gate;},onSuccess:item=>saved.push(item.id)});
+  await tick();stop=true;release();
+  assert.deepEqual(await job,{completed:1,failed:0,paused:true});
+  assert.deepEqual(calls,['head']);assert.deepEqual(saved,['head']);
+});
+
+test('malformed cyclic dependencies fail closed instead of hanging',async()=>{
+  const result=await run({items:[{id:'a',dependsOn:['b']},{id:'b',dependsOn:['a']}],concurrency:2,
+    translate:()=>assert.fail('must not translate an unresolved cycle')});
+  assert.equal(result.failed,2);
+});
+
+test('a partial batch failure does not deadlock an independent continuation chain',{timeout:1000},async()=>{
+  const saved=[],errors=[];let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const items=[{id:'tail',dependsOn:['head'],blocks:[{id:'tail'}]},
+    {id:'batch',blocks:[{id:'x'},{id:'y'}]},{id:'head',blocks:[{id:'head'}]}];
+  const job=run({items,concurrency:3,translate:group=>translateGroup({blocks:group.blocks,
+    translateBatch:async()=>({blocks:[{id:'x',translation:'已保存的部分译文'}]}),
+    translateOne:async block=>{
+      if(block.id==='head')await gate;
+      if(block.id==='y')throw new Error('single fallback failed');
+      if(block.id==='tail')assert.ok(saved.includes('head'));
+      return {...block,translation:'译文'};
+    },onBlock:block=>saved.push(block.id)}),onError:item=>errors.push(item.id)});
+  await tick();assert.deepEqual(saved,['x']);assert.deepEqual(errors,['batch']);
+  release();assert.deepEqual(await job,{completed:2,failed:1,paused:false});
+  assert.deepEqual(saved,['x','head','tail']);
+});
+
+test('a fatal rejection wakes dependency waiters and still drains unrelated in-flight results',{timeout:1000},async()=>{
+  const pending=new Map(),saved=[],started=[];let finished=false;
+  const job=run({items:[{id:'tail',dependsOn:['head']},{id:'head'},{id:'other'}],concurrency:3,
+    translate:item=>new Promise((resolve,reject)=>{started.push(item.id);pending.set(item.id,{resolve,reject});}),
+    onSuccess:item=>saved.push(item.id)}).then(result=>{finished=true;return result;});
+  pending.get('head').reject(Object.assign(new Error('unauthorized'),{status:401}));await tick();
+  assert.equal(finished,false);assert.deepEqual(started,['head','other']);
+  pending.get('other').resolve('saved');
+  assert.deepEqual(await job,{completed:1,failed:1,paused:false});assert.deepEqual(saved,['other']);
+});
+
+test('an aborted predecessor request releases waiting workers when the run is stopped',{timeout:1000},async()=>{
+  let reject,stop=false;const started=[];
+  const job=run({items:[{id:'tail',dependsOn:['head']},{id:'head'}],concurrency:2,
+    shouldStop:()=>stop,translate:item=>{started.push(item.id);return new Promise((_,fail)=>{reject=fail;});}});
+  stop=true;reject(Object.assign(new Error('aborted'),{name:'AbortError'}));
+  assert.deepEqual(await job,{completed:0,failed:1,paused:true});assert.deepEqual(started,['head']);
+});
+
+test('a start callback failure settles the item and wakes all dependency waiters',{timeout:1000},async()=>{
+  const failure=new Error('start UI failed'),calls=[],settled=[];let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const job=run({items:[{id:'tail',dependsOn:['child']},{id:'child',dependsOn:['head']},{id:'head'}],concurrency:3,
+    onStart:item=>{if(item.id==='child')throw failure;},
+    translate:async item=>{calls.push(item.id);await gate;},onSettled:item=>settled.push(item.id)});
+  const rejected=assert.rejects(job,error=>error===failure);
+  release();await rejected;
+  assert.deepEqual(calls,['head']);assert.deepEqual(settled,['head','child']);
+});
+
+test('success error and settled callback failures drain active work before rejecting',{timeout:1000},async()=>{
+  for(const callback of ['onSuccess','onError','onSettled']){
+    const failure=new Error(callback+' UI failed'),pending=new Map(),saved=[],started=[];let finished=false;
+    const hooks={onSuccess:item=>saved.push(item.id)};
+    hooks[callback]=item=>{if(item.id==='head')throw failure;if(callback==='onSuccess')saved.push(item.id);};
+    const job=run({items:[{id:'tail',dependsOn:['head']},{id:'head'},{id:'other'}],concurrency:3,...hooks,
+      translate:item=>new Promise((resolve,reject)=>{started.push(item.id);pending.set(item.id,{resolve,reject});})});
+    const rejected=assert.rejects(job,error=>error===failure).then(()=>{finished=true;});
+    if(callback==='onError')pending.get('head').reject(new Error('provider failed'));
+    else pending.get('head').resolve('head result');
+    await tick();assert.equal(finished,false,callback);assert.deepEqual(started,['head','other']);
+    pending.get('other').resolve('other result');await rejected;
+    assert.ok(saved.includes('other'),callback);
+  }
+});

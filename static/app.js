@@ -132,7 +132,7 @@ function updateProgressControls(){
   updateOpenProgress(count,total);
   $('#progress-bar').style.width=`${total?count/total*100:0}%`;
   $('#translation-count').textContent=`${count} / ${total} 段已译 · ${state.target}`;
-  $('#translate-all').textContent=state.running?(state.stop?'正在暂停…':'Ⅱ 暂停翻译'):(count && count<total?'✦ 继续翻译':'✦ 翻译全文');
+  $('#translate-all').textContent=state.running?(state.stop?'正在暂停…':'暂停翻译'):(count && count<total?'继续翻译':'翻译全文');
   $('#translate-all').disabled=state.uploading || state.loading || !total || (state.running && state.stop);
   $('#reading-activity').classList.toggle('hidden',!state.running);
   $('#reading-activity').textContent=state.stop?'正在暂停…':`翻译中 · ${state.activeBlocks.size} 段`;
@@ -156,9 +156,20 @@ function updateControls(){
   $$('.card-actions button').forEach(button=>button.disabled=state.running);
   updateLayoutControls();
 }
+const LIBRARY_EMPTY='<div class="library-empty"><strong>还没有文档</strong><ol>'+
+  '<li><b>1</b><span><span class="step-todo">点右上角「模型设置」，填好接口地址和模型名称。</span><span class="step-ready">模型已经设置好，之后可以在右上角「模型设置」里修改。</span></span></li>'+
+  '<li><b>2</b><span>把 PDF 拖到上面的虚线框里，或者点「导入 PDF」。</span></li>'+
+  '<li><b>3</b><span>译完会自动打开：左边是原文，右边是按原版式排好的译文。</span></li></ol></div>';
+function libraryCard(doc){
+  const name=escapeHtml(doc.name),total=Number(doc.total_blocks)||0,done=Number(doc.translated)||0;
+  const complete=total>0 && done>=total,percent=complete?100:total?Math.floor(done/total*100):0;
+  const label=complete?'已译完':done?`已译 ${percent}%`:'未翻译';
+  const action=complete?'打开阅读':done?'译完剩下的再打开':'翻译后打开';
+  return `<div class="library-entry"><button class="library-item ${state.doc?.id===doc.id?'active':''}" data-doc="${doc.id}" title="${name}" aria-label="${action}：${name}"><span class="doc-thumb" aria-hidden="true"><img src="/api/documents/${encodeURIComponent(doc.id)}/pages/1.png?scale=0.6" alt="" loading="lazy" decoding="async" draggable="false"><span class="doc-state ${complete?'done':''}">${label}</span><span class="doc-open">${action}</span></span><span class="doc-info"><strong>${name}</strong><small><span>${doc.pages} 页 · ${done} 段有译文</span><span class="doc-percent">${percent}%</span></small><span class="library-progress"><i style="width:${percent}%"></i></span></span></button><div class="library-actions"><button class="library-read" data-read-doc="${doc.id}" title="不开始翻译，直接进入阅读" aria-label="直接打开 ${name}">直接打开</button></div></div>`;
+}
 function renderLibrary(){
   $('#library-count').textContent=state.library.length;
-  $('#library').innerHTML=state.library.length?state.library.map(doc=>`<button class="library-item ${state.doc?.id===doc.id?'active':''}" data-doc="${doc.id}" title="${escapeHtml(doc.name)}" aria-label="打开 ${escapeHtml(doc.name)}"><span class="doc-symbol">▤</span><div><strong>${escapeHtml(doc.name)}</strong><small>${doc.pages} 页 · ${doc.translated} 段已有译文</small></div></button><button class="library-read" data-read-doc="${doc.id}" aria-label="直接阅读 ${escapeHtml(doc.name)}">直接阅读</button>`).join(''):'<p class="library-empty">导入第一份文档，<br>开始跨越语言的阅读。</p>';
+  $('#library').innerHTML=state.library.length?state.library.map(libraryCard).join(''):LIBRARY_EMPTY;
   updateControls();
 }
 async function refreshLibrary(){state.library=await api('/api/documents');renderLibrary();}
@@ -168,11 +179,11 @@ function renderDocument(ready=false){
   $('#welcome').classList.add('hidden');$('#reader').classList.remove('hidden');
   $('#document-name').textContent=state.doc.name;$('#breadcrumb-title').textContent=state.doc.name;
   const empty=state.doc.pages.filter(page=>page.needs_ocr).length;
-  $('#document-meta').textContent=`${state.doc.pages.length} 页 · ${state.doc.total_blocks} 个文本块 · 自动保存${empty?` · ${empty} 页无可提取文字`:''}`;
+  $('#document-meta').textContent=`${state.doc.pages.length} 页 · ${state.doc.total_blocks} 段 · 改动自动保存${empty?` · ${empty} 页读不出文字`:''}`;
   $('#page-select').innerHTML=state.doc.pages.map((page,i)=>`<option value="${i}">${page.number}</option>`).join('');
   $('#page-total').textContent=`/ ${state.doc.pages.length}`;
   $('#export').href=`/api/documents/${state.doc.id}/export`;
-  if(!ready)invalidateLayout();renderPage();renderLibrary();status('准备就绪 · 单击同步选中，点击空白取消 · Shift 连选');if(!ready && blocks().some(isTranslated))refreshLayout();globalThis.PaperAssistant?.documentChanged();
+  if(!ready)invalidateLayout();renderPage();renderLibrary();status('就绪。单击段落两侧对齐，按住 Shift 可连选，点空白处取消');if(!ready && blocks().some(isTranslated))refreshLayout();globalThis.PaperAssistant?.documentChanged();
 }
 const SOFT_LIST_LINE=/^\s*(?:[•·●▪▫◦‣∙⋅※■□◆◇]|\(?\d{1,2}[.)]|[A-Za-z][.)])\s+/m;
 function proseSource(text){
@@ -198,7 +209,7 @@ function renderCard(block,index){
   if(block.translation && block.target!==state.target) label=`已有${block.target}译文`;
   if(error) label='翻译失败'; if(working) label='<span class="busy-indicator"></span>翻译中';
   const needsStatus=working || error || !block.translation || block.target!==state.target;
-  return `<article class="translation-card ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" id="card-${block.id}" tabindex="0" aria-label="第 ${index+1} 段"><div class="card-meta ${needsStatus?'':'hidden'}"><span class="state ${error?'error':''}">${label}</span></div>${text}${error?`<div class="block-error">${escapeHtml(error)}</div>`:''}<div class="card-actions"><button data-action="translate" data-id="${block.id}">${block.translation?'↻ 重新翻译':'✦ 翻译此段'}</button><button data-action="edit" data-id="${block.id}">编辑译文</button>${block.translation?`<button data-action="copy" data-id="${block.id}">复制</button>`:''}</div></article>`;
+  return `<article class="translation-card ${isBlockSelected(block.id)?'selected':''}" data-block="${block.id}" id="card-${block.id}" tabindex="0" aria-label="第 ${index+1} 段"><div class="card-meta ${needsStatus?'':'hidden'}"><span class="state ${error?'error':''}">${label}</span></div>${text}${error?`<div class="block-error">${escapeHtml(error)}</div>`:''}<div class="card-actions"><button data-action="translate" data-id="${block.id}">${block.translation?'重新翻译':'翻译这段'}</button><button data-action="edit" data-id="${block.id}">修改译文</button>${block.translation?`<button data-action="copy" data-id="${block.id}">复制</button>`:''}</div></article>`;
 }
 let blockGroupCache={doc:null,layout:null,groups:new Map()};
 function blockGroup(id){
@@ -300,7 +311,7 @@ function updateZoomControls(){
   $('#zoom-in').disabled=!enabled || readerViewport.zoom>=MAX_READER_ZOOM;
   $('#zoom-reset').disabled=!enabled;$('#zoom-fit').disabled=!enabled;
   $('#zoom-fit').setAttribute('aria-pressed',String(readerViewport.fit));
-  $('#zoom-hint').textContent=enabled?'同步缩放 · Ctrl＋滚轮':'段落视图 · 切回 PDF 可缩放';
+  $('#zoom-hint').textContent=enabled?'Ctrl + 滚轮缩放':'逐段文字不能缩放';
 }
 function applyViewportGeometry(){
   if(!state.doc || !pdfPanes().some(pane=>pane.clientWidth>0))return;
@@ -396,6 +407,7 @@ async function loadReaderText(page){
     const canvas=document.createElement('canvas'),measure=canvas.getContext('2d');
     const fragment=document.createDocumentFragment();
     if(data.version){layer.dataset.version=data.version;layer.dataset.page=data.page;}
+    if(data.legacy_version)layer.dataset.legacyVersion=data.legacy_version;else delete layer.dataset.legacyVersion;
     for(const line of data.lines){
       const row=document.createElement('span');row.className='pdf-text-line';
       for(const [text,x,y,width,height,a,b,c,d,run,start] of line){
@@ -535,14 +547,14 @@ function renderTranslations(){
     const untranslated=blocks().filter(block=>!isTranslated(block)).length;
     if(!valid || untranslated){
       const notice=document.createElement('div');notice.className='layout-notice';
-      notice.textContent=valid?`还有 ${untranslated} 段未译，可选中原文精读或从菜单开始翻译。`:state.layoutError || (state.layoutBusy?'正在排版，暂显示原文…':state.running?'翻译中，每页译完后自动更新版式':'可选中原文精读，或从菜单开始翻译');
+      notice.textContent=valid?`还有 ${untranslated} 段没译，可以在右上角菜单里继续翻译。`:state.layoutError || (state.layoutBusy?'正在排版，先显示原文…':state.running?'正在翻译，每译完一页这里就换成译文':'还没有译文。可以先读原文，或在右上角菜单里开始翻译');
       pane.prepend(notice);
     }
     $$('#translation-pane .pdf-page img').forEach(img=>img.addEventListener('error',()=>toast('译文页面加载失败，请点击重新排版或切换段落视图')));
     refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
     applyViewportGeometry();restorePanePosition(pane,position,top);setPaneScroll(pane,pane.scrollTop,left);updateControls();alignReaderAfterRender();return;
   }
-  pane.innerHTML=state.doc.pages.map((page,pageIndex)=>`<section class="reader-page paragraph-page" data-page-index="${pageIndex}" aria-label="第 ${page.number} 页译文"><div class="page-divider">第 ${page.number} 页</div>${page.blocks.length?page.blocks.map(renderCard).join(''):'<div class="ocr-notice"><strong>这一页没有可提取的文字</strong><br>可能是扫描件、图片页或空白页。第一版暂不包含 OCR，请先用 OCR 工具生成可搜索 PDF 后再导入。其他含文字的页面仍可正常翻译。</div>'}</section>`).join('');
+  pane.innerHTML=state.doc.pages.map((page,pageIndex)=>`<section class="reader-page paragraph-page" data-page-index="${pageIndex}" aria-label="第 ${page.number} 页译文"><div class="page-divider">第 ${page.number} 页</div>${page.blocks.length?page.blocks.map(renderCard).join(''):'<div class="ocr-notice"><strong>这一页读不出文字</strong><br>可能是扫描件、整页图片或空白页。目前不做 OCR，可以先用 OCR 工具转成能选中文字的 PDF 再导入。其他页面照常翻译。</div>'}</section>`).join('');
   refreshGroupHighlights();applyBlockSelection();hoverBlock(readingInteraction.hovered);
   applyViewportGeometry();restorePanePosition(pane,position,top);updateControls();alignReaderAfterRender();
 }
@@ -582,24 +594,24 @@ function updateOpenProgress(count,total){
   $('#open-name').textContent=state.uploading?'正在导入 PDF…':state.loading?'正在读取 PDF…':state.doc?.name || '';
   $('#open-percent').textContent=`${percent}%`;
   $('#open-meter').value=percent;
-  $('#open-status').textContent=state.uploading || state.loading?'正在解析文档，请稍候…':state.openMessage || `${state.stop?'正在暂停':'正在翻译'} · ${count} / ${total} 段 · ${state.target}`;
+  $('#open-status').textContent=state.uploading || state.loading?'正在解析文档…':state.openMessage || `${state.stop?'正在暂停':'正在翻译'} · ${count} / ${total} 段 · 译成${state.target}`;
   $('#open-action').textContent=state.running?(state.stop?'正在暂停…':'暂停翻译'):count===total && total?'重新排版并打开':'继续翻译';
   $('#open-action').disabled=state.uploading || state.loading || (state.preparing && !state.running) || (state.running && state.stop) || !total;
 }
 async function prepareDocument(){
   if(!state.pendingOpen || state.preparing || state.running || state.loading || state.uploading)return;
   const pending=blocks().filter(block=>!isTranslated(block));
-  if(!blocks().length){state.openMessage='没有可提取的文字，请先对扫描件进行 OCR，再重新导入。';updateControls();return;}
-  if(pending.length && !validAgent()){state.openMessage='请先配置 Agent，保存后点击继续翻译。';updateControls();return;}
+  if(!blocks().length){state.openMessage='这份 PDF 读不出文字，可能是扫描件。请先做 OCR，再重新导入。';updateControls();return;}
+  if(pending.length && !validAgent()){state.openMessage='还没填写模型设置。填好保存后，点「继续翻译」。';updateControls();return;}
   state.preparing=true;state.openMessage='';updateControls();
   try{
     if(pending.length)await runTranslation(pending);
-    if(blocks().some(block=>!isTranslated(block))){const error=Object.values(state.errors)[0];state.openMessage=error?`翻译失败：${error}。已保留完成的译文，可点击继续翻译重试。`:'已暂停，点击继续翻译可从当前进度恢复。';return;}
-    state.openMessage='翻译 100% · 正在排版，完成后自动打开…';updateControls();
+    if(blocks().some(block=>!isTranslated(block))){const error=Object.values(state.errors)[0];state.openMessage=error?`翻译失败：${error}。已经译好的部分不会丢，点「继续翻译」重试。`:'已暂停。点「继续翻译」从这里接着译。';return;}
+    state.openMessage='翻译完成，正在排版，排好后自动打开…';updateControls();
     await refreshLayout();
-    if(state.layoutError || !state.layout || state.layoutKey!==layoutKey())throw new Error(state.layoutError || '排版未完成，请重试');
+    if(state.layoutError || !state.layout || state.layoutKey!==layoutKey())throw new Error(state.layoutError || '排版没有完成，请重试');
     state.pendingOpen=false;renderDocument(true);
-  }catch(error){state.openMessage=`处理失败：${error.message}。可重试，已完成的译文会保留。`;toast(error.message);}
+  }catch(error){state.openMessage=`处理失败：${error.message}。已经译好的部分不会丢，可以重试。`;toast(error.message);}
   finally{state.preparing=false;updateControls();}
 }
 async function openDocument(id,direct=false){
@@ -766,7 +778,7 @@ async function runTranslation(selectedBlocks,retryPass=false){
   const request={agent:{...state.agent},target:state.target,...state.context};
   const docId=state.doc.id;
   const canBatch=state.batchSupported && state.agent.mode==='openai' && !retryPass;
-  const groups=TranslationQueue.groupByPage(state.doc.pages,selectedBlocks,canBatch?state.batchSize:1,12000,4000);
+  const groups=TranslationQueue.groupByPage(state.doc.pages,selectedBlocks,canBatch?state.batchSize:1,12000,4000,state.doc.continuations || {});
   const pageTracker=TranslationQueue.createPageTracker(state.doc.pages,selectedBlocks,()=>{if(!state.pendingOpen)scheduleLayout();});
   let allowBatch=canBatch,fallbackStreak=0;
   const send=(path,body)=>TranslationQueue.withRetry(()=>api(path,{method:'POST',body:JSON.stringify(body)}),{
@@ -818,7 +830,11 @@ function showSettings(){
   setKeyVisible(false);
   modeVisibility();$('#connection-status').textContent='';$('#settings-dialog').showModal();
 }
-function updateAgentDot(){$('#agent-dot').classList.toggle('configured',Boolean(state.agent.base_url && (state.agent.mode==='custom'||state.agent.model)));}
+function updateAgentDot(){
+  const ready=Boolean(state.agent.base_url && (state.agent.mode==='custom'||state.agent.model));
+  $('#agent-dot').classList.toggle('configured',ready);$('#agent-dot').title=ready?'模型已设置':'还没设置模型';
+  document.body.classList.toggle('agent-ready',ready);
+}
 $('#settings-button').onclick=showSettings;
 $('#zoom-in').onclick=()=>setReaderZoom(readerViewport.zoom*1.2);
 $('#zoom-out').onclick=()=>setReaderZoom(readerViewport.zoom/1.2);
@@ -866,6 +882,8 @@ $('#drop-zone').onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event
 $('#file-input').onchange=()=>uploadFile($('#file-input').files[0]);
 for(const eventName of ['dragenter','dragover'])$('#drop-zone').addEventListener(eventName,event=>{event.preventDefault();$('#drop-zone').classList.add('dragging');});
 for(const eventName of ['dragleave','drop'])$('#drop-zone').addEventListener(eventName,event=>{event.preventDefault();$('#drop-zone').classList.remove('dragging');if(eventName==='drop')uploadFile(event.dataTransfer.files[0]);});
+// Failed thumbnails retain the card and its reading actions.
+$('#library').addEventListener('error',event=>{if(event.target.matches?.('.doc-thumb img'))event.target.remove();},true);
 $('#library').onclick=event=>{const direct=event.target.closest('[data-read-doc]');if(direct){openDocument(direct.dataset.readDoc,true);return;}const button=event.target.closest('[data-doc]');if(button)openDocument(button.dataset.doc);};
 $('#previous-page').onclick=()=>choosePage(state.page-1);$('#next-page').onclick=()=>choosePage(state.page+1);
 $('#page-select').onchange=event=>choosePage(event.target.value);

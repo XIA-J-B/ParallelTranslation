@@ -6,7 +6,7 @@ if(typeof window!=='undefined'){
   const panes=[document.querySelector('#source-pane'),document.querySelector('#translation-pane')];
   const float=document.createElement('div');float.id='quote-toolbar';float.className='hidden';
   float.setAttribute('role','toolbar');float.setAttribute('aria-label','选中文字操作');
-  float.innerHTML='<div class="quote-actions"><button data-quote="explain">解释</button><button data-quote="add">引用</button><button data-quote="highlight">高亮</button><button data-quote="remove-highlight" class="hidden">取消高亮</button></div>'+
+  float.innerHTML='<div class="quote-actions"><button data-quote="translate">翻译</button><button data-quote="explain">解释</button><button data-quote="add">引用</button><button data-quote="highlight">高亮</button><button data-quote="remove-highlight" class="hidden">取消高亮</button></div>'+
     '<div class="highlight-colors" role="group" aria-label="高亮颜色">'+Object.entries(colors).map(([key,color])=>`<button data-highlight-color="${key}" style="--highlight-color:${color.value}" aria-label="${color.label}高亮" title="${color.label}高亮" aria-pressed="${key===selectedColor}"></button>`).join('')+'</div>';
   document.body.append(float);
   function refresh(){
@@ -176,7 +176,7 @@ if(typeof window!=='undefined'){
       if(action==='highlight'){
         const next=[...highlights.filter(h=>!quotes.some(q=>q.id===h.id)),...quotes.map(q=>({...q,color:highlightColor}))];
         if(saveHighlights(next))toast('已高亮，点击高亮文字可调整颜色或取消');
-      }else globalThis.PaperAssistant?.addCitations(quotes,action==='explain');getSelection()?.removeAllRanges();
+      }else globalThis.PaperAssistant?.addCitations(quotes,action);getSelection()?.removeAllRanges();
     }catch(error){toast(error.message);}
   });
   function textRange(content,start,end){
@@ -210,7 +210,7 @@ if(typeof window!=='undefined'){
         const revision=pane===panes[1]?state.layout?.revision:null;
         if((source.view==='translation') ? pane!==panes[1] || source.revision!==revision : Boolean(revision))continue;
         const page=pane.querySelector(`[data-page-index="${source.page-1}"]`),layer=page?.querySelector('.pdf-text-layer');
-        if(!layer || layer.dataset.version!==source.text_version)continue;
+        if(!layer || !source.text_version || (layer.dataset.version!==source.text_version && layer.dataset.legacyVersion!==source.text_version))continue;
         for(const [x,y,r,b] of source.rects || []){const el=document.createElement('div');el.className='saved-text-highlight';el.dataset.highlight=quote.id;el.dataset.color=color;Object.assign(el.style,{left:x*100+'%',top:y*100+'%',width:(r-x)*100+'%',height:(b-y)*100+'%',background:colors[color].value+'66'});page.append(el);paintedHighlights.push({quote,pane,region:el});}
       }
     }

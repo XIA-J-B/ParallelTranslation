@@ -178,7 +178,8 @@ class CaptionTypesettingTests(unittest.TestCase):
                     self.assertEqual({block["translation"] for block in grouped}, {"正文译文", "图注译文"})
 
     def test_unnumbered_caption_words_inside_artwork_remain_figure_labels(self):
-        for label in ("Figure features", "Table lookup", "Algorithm selection"):
+        for label, translated in (("Figure features", "图形特征"), ("Table lookup", "表格查找"),
+                                  ("Algorithm selection", "算法选择")):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 with patch.object(service, "DATA", root), pymupdf.open() as original:
@@ -189,16 +190,22 @@ class CaptionTypesettingTests(unittest.TestCase):
                     doc_id, document = service.extract_document(original.tobytes(), "caption-words.pdf")
                     for block in document["pages"][0]["blocks"]:
                         block.update(translation="图1：系统概览。" if block["text"].startswith("Figure 1:")
-                                     else "图内标签不应替换", target="简体中文")
+                                     else translated, target="简体中文")
                     unchanged = copy.deepcopy(document)
                     raw, report = pdf_layout.typeset(root / doc_id / "source.pdf", document, "简体中文")
                     self.assertEqual(document, unchanged)
-                    self.assertEqual(report["preserved"], 1, report)
-                    self.assertEqual(report["replaced"], 1, report)
+                    self.assertEqual(report["preserved"], 0, report)
+                    self.assertEqual(report["replaced"], 2, report)
+                    anchored = [item for item in report['structured_regions'] if item['kind'] == 'figure_label']
+                    self.assertEqual(len(anchored), 1)
+                    self.assertEqual(anchored[0]['text'], translated)
+                    self.assertEqual(anchored[0]['source_size'], anchored[0]['output_size'])
                     with pymupdf.open(stream=raw, filetype="pdf") as output:
-                        self.assertIn(label, output[0].get_text())
+                        self.assertNotIn(label, output[0].get_text())
                         self.assertIn("系统概览", output[0].get_text())
-                        self.assertNotIn("图内标签不应替换", output[0].get_text())
+                        self.assertIn(translated, output[0].get_text())
+                        self.assertEqual(output[0].get_drawings()[0]['rect'], page.get_drawings()[0]['rect'])
+                        self.assertEqual(output[0].get_drawings()[0]['fill'], page.get_drawings()[0]['fill'])
 
     def test_english_and_entirely_bold_captions_keep_source_alignment_and_weight(self):
         prose = ("Figure 7: A system overview. The illustration summarizes the controller and its "

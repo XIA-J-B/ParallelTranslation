@@ -2,21 +2,24 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>页间 Parallel · PDF 对照翻译</title>
   <link rel="icon" type="image/x-icon" href="/static/parallel.ico">
   <link rel="icon" type="image/svg+xml" href="/static/parallel.svg">
   <style>
     #launch-notice{display:none}
-    html.needs-server body{margin:0;background:#f4f7f1;color:#293e32;font:16px/1.8 'Segoe UI','Microsoft YaHei',sans-serif}
+    html.needs-server body{margin:0;background:#f4f1ea;color:#1c1f26;font:15px/1.8 'Segoe UI','Microsoft YaHei',sans-serif}
     html.needs-server body>:not(#launch-notice){display:none!important}
-    html.needs-server #launch-notice{display:block;box-sizing:border-box;max-width:620px;margin:12vh auto;padding:36px;background:#fff;border:1px solid #dde6d8;border-radius:14px}
-    #launch-notice h1{font-size:25px;font-weight:500;margin:0 0 16px}
-    #launch-notice p{color:#66755f;font-size:14px}
-    #launch-notice code{background:#edf3e8;padding:3px 7px;border-radius:4px;overflow-wrap:anywhere}
-    #launch-notice a{display:inline-block;margin-top:14px;padding:10px 18px;border-radius:7px;background:#217965;color:#fff;text-decoration:none;font-size:14px}
-    @media(max-width:660px){html.needs-server #launch-notice{margin:8vh 18px;padding:26px}}
+    html.needs-server #launch-notice{display:block;box-sizing:border-box;max-width:600px;margin:12vh auto;padding:36px 40px;background:#fff;border:1px solid #e3ded3;border-radius:16px;box-shadow:0 18px 50px rgba(28,31,38,.12)}
+    #launch-notice h1{font-size:23px;font-weight:600;margin:0 0 14px}
+    #launch-notice p{color:#5f6570;font-size:14px}
+    #launch-notice code{background:#e7ecf8;color:#2a428f;padding:2px 7px;border-radius:5px;overflow-wrap:anywhere}
+    #launch-notice a{display:inline-block;margin-top:14px;padding:10px 18px;border-radius:9px;background:#2f4a9e;color:#fff;text-decoration:none;font-size:14px;font-weight:600}
+    @media(prefers-color-scheme:dark){html.needs-server body{background:#121418;color:#e6e7ea}html.needs-server #launch-notice{background:#1a1d23;border-color:#2b2f37}#launch-notice p{color:#979ca6}#launch-notice code{background:#1d2644;color:#a9bcf5}}
+    @media(max-width:660px){html.needs-server #launch-notice{margin:8vh 16px;padding:26px}}
   </style>
   <script>
+    try { const theme = JSON.parse(localStorage.getItem('parallel-theme')); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}
     if (location.protocol === 'file:') {
       document.documentElement.classList.add('needs-server');
     } else {
@@ -27,7 +30,7 @@
       const assistantStyle=document.createElement('link');assistantStyle.rel='stylesheet';assistantStyle.href='/static/reading-assistant.css';document.head.append(assistantStyle);
       for(const href of ['/static/guided-reading.css','/static/vendor/katex/katex.min.css']){const link=document.createElement('link');link.rel='stylesheet';link.href=href;document.head.append(link);}
       document.addEventListener('DOMContentLoaded', () => {
-        for (const asset of ['translation-queue.js', 'app.js', 'reading-assistant.js', 'vendor/marked.js', 'vendor/purify.js', 'vendor/katex/katex.min.js', 'vendor/katex/contrib/auto-render.min.js', 'guided-reading.js', 'reading-selection.js']) {
+        for (const asset of ['theme.js', 'translation-queue.js', 'app.js', 'reading-assistant.js', 'vendor/marked.js', 'vendor/purify.js', 'vendor/katex/katex.min.js', 'vendor/katex/contrib/auto-render.min.js', 'guided-reading.js', 'reading-selection.js']) {
           const script = document.createElement('script');
           script.async = false;
           script.src = '/static/' + asset;
@@ -38,104 +41,137 @@
   </script>
 </head>
 <body>
-  <section id="launch-notice" aria-label="启动指引">
-    <h1>请通过启动程序打开页间</h1>
-    <p>你现在打开的是 HTML 文件。PDF 解析、文档保存和翻译需要本机服务，不能直接在文件页面中运行。</p>
-    <p>请返回项目文件夹，双击 <code>start.bat</code>。服务就绪后会自动打开阅读工作台，使用期间请保留启动窗口。</p>
-    <p>如果服务已经启动，可以直接进入：</p>
-    <a href="http://127.0.0.1:8765/">打开本地工作台 →</a>
+  <section id="launch-notice" aria-label="启动说明">
+    <h1>请用启动程序打开页间</h1>
+    <p>你打开的是 HTML 文件本身。解析 PDF、保存文档和翻译都要靠本机服务，直接打开文件用不了。</p>
+    <p>回到项目文件夹，双击 <code>start.bat</code>。服务启动后浏览器会自动打开页面，用的时候别关掉托盘里的程序。</p>
+    <p>服务已经在运行的话，点这里：</p>
+    <a href="http://127.0.0.1:8765/">打开 http://127.0.0.1:8765 →</a>
   </section>
-  <aside class="sidebar">
-    <a class="brand" href="/" aria-label="页间首页"><img class="brand-icon" src="/static/parallel.svg" alt=""><span>页间 <b>Parallel</b></span></a>
-    <div class="workspace-label">你的阅读工作台</div>
-    <button id="upload-side" class="new-document"><span>＋</span> 导入 PDF <kbd>本地</kbd></button>
-    <div class="section-label">文档库 <span id="library-count">0</span></div>
-    <nav id="library" aria-label="文档库"><p class="library-empty">导入第一份文档，<br>开始跨越语言的阅读。</p></nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><div>本地工作空间<small>文件与译文保存在此设备</small></div></div>
-  </aside>
   <main>
-    <header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong id="breadcrumb-title">对照翻译</strong></div><button id="settings-button" class="button subtle"><span aria-hidden="true">⚙</span> Agent 设置 <span id="agent-dot" class="status-dot"></span></button></header>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="页间首页"><img class="brand-icon" src="/static/parallel.svg" alt=""><span>页间<b>Parallel</b></span></a>
+      <span class="breadcrumb" hidden><strong id="breadcrumb-title">对照翻译</strong></span>
+      <div class="topbar-actions">
+        <button id="theme-toggle" class="icon-button theme-toggle" type="button" aria-label="界面颜色：跟随系统" title="界面颜色：跟随系统">
+          <svg class="ico theme-icon theme-icon-system" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path class="ico-fill" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></svg>
+          <svg class="ico theme-icon theme-icon-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>
+          <svg class="ico theme-icon theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6z"/></svg>
+        </button>
+        <button id="settings-button" class="button subtle" title="翻译用的模型接口"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="button-label">模型设置</span><span id="agent-dot" class="status-dot"></span></button>
+        <button id="upload-side" class="button primary new-document"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="button-label">导入 PDF</span></button>
+      </div>
+    </header>
     <section id="welcome" class="welcome">
-      <div class="eyebrow"><span></span> 让理解，不止于翻译</div>
-      <h1>原文与新知，<br>在页间相遇<span>。</span></h1>
-      <p class="welcome-description">带上你自己的 AI，读懂每一份 PDF。<br>保留原文版面，让上下文、术语和译文彼此对应。</p>
-      <label class="direct-import"><input id="import-direct" type="checkbox"> 导入后直接阅读（不自动翻译）</label><div class="import-options"><label>译为 <select id="home-target" aria-label="导入文档的目标语言"></select></label><button id="home-context" class="button subtle">术语与要求</button></div>
-      <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 PDF">
-        <div class="file-icon">PDF<span>↥</span></div><h2>将 PDF 拖到这里</h2><p>或者 <span class="text-link">点击选择文件</span></p><small>支持文字型 PDF · 最大 50 MB / 300 页</small>
+      <div class="welcome-inner">
+        <div class="library-head">
+          <h1>文档库</h1>
+          <p class="library-summary"><span id="library-count">0</span> 篇</p>
+        </div>
+        <div class="import-card">
+          <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 PDF">
+            <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></div>
+            <div class="drop-copy"><h2>把 PDF 拖到这里，或<span class="text-link">选择文件</span></h2><small>单个不超过 50 MB、300 页</small></div>
+          </div>
+          <div id="open-progress" class="open-progress hidden" aria-label="文档翻译进度">
+            <strong id="open-name"></strong><span id="open-percent">0%</span>
+            <progress id="open-meter" max="100" value="0" aria-label="已翻译百分比"></progress>
+            <p id="open-status" role="status"></p>
+            <small>全部译完、排好版后会自动打开。</small>
+            <div class="open-actions"><button id="read-direct" class="button secondary">先读原文</button><button id="open-action" class="button primary">继续翻译</button></div>
+          </div>
+          <div class="import-options">
+            <label class="option-row">译成 <select id="home-target" aria-label="导入文档的目标语言"></select></label>
+            <button id="home-context" class="button subtle option-row">术语与要求<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+            <label class="direct-import"><input id="import-direct" type="checkbox"> 导入后先不翻译</label>
+          </div>
+        </div>
+        <nav id="library" class="library-grid" aria-label="文档库"><p class="library-loading">正在读取文档库…</p></nav>
       </div>
-      <div id="open-progress" class="open-progress hidden" aria-label="文档翻译进度">
-        <strong id="open-name"></strong><span id="open-percent">0%</span>
-        <progress id="open-meter" max="100" value="0" aria-label="已翻译百分比"></progress>
-        <p id="open-status" role="status"></p>
-        <small>全文翻译并排版完成后，将自动打开对照阅读。</small>
-        <button id="read-direct" class="button secondary">直接阅读原文</button><button id="open-action" class="button secondary">继续翻译</button>
-      </div>
-      <div class="welcome-features"><div><span>01</span><b>原版对照</b><p>原始页面与译文双向定位</p></div><div><span>02</span><b>你的 Agent</b><p>兼容自定义模型 API</p></div><div><span>03</span><b>连贯理解</b><p>携带前后文与专属术语</p></div></div>
-      <p class="welcome-note">PDF 保存在本机；翻译时将相关文本发送至你配置的接口。</p>
     </section>
     <section id="reader" class="reader hidden">
       <div class="reader-toolbar">
-        <button id="back-library" class="icon-button" aria-label="返回文档库" title="返回文档库">‹</button>
+        <button id="back-library" class="button subtle back-button" aria-label="返回文档库" title="返回文档库"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><span class="button-label">文档库</span></button>
         <h1 id="document-name"></h1>
-        <div class="page-navigation"><button id="previous-page" class="icon-button" aria-label="上一页">‹</button><select id="page-select" aria-label="选择页码"></select><span id="page-total"></span><button id="next-page" class="icon-button" aria-label="下一页">›</button></div>
-        <button id="assistant-toggle" class="button secondary" aria-expanded="false" aria-controls="reading-assistant">论文助手</button><span id="reading-activity" class="hidden" role="status">翻译中</span>
+        <div class="page-navigation"><button id="previous-page" class="icon-button" aria-label="上一页" title="上一页"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><select id="page-select" aria-label="跳到第几页"></select><span id="page-total"></span><button id="next-page" class="icon-button" aria-label="下一页" title="下一页"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></div>
+        <button id="assistant-toggle" class="button secondary" aria-expanded="false" aria-controls="reading-assistant" title="选中文字提问、速读全文、记笔记"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3.5 12.9 8l4.6 1.9-4.6 1.9L11 16.3l-1.9-4.5-4.6-1.9L9.1 8z"/><path d="M18.5 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span class="button-label">AI 助读</span></button><span id="reading-activity" class="hidden" role="status">翻译中</span>
         <details id="reader-menu" class="reader-menu">
-          <summary aria-label="阅读与翻译选项" title="阅读与翻译选项">•••</summary>
+          <summary aria-label="翻译与阅读设置" title="翻译与阅读设置"><svg class="ico ico-fill" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary>
           <div class="reader-menu-panel">
             <p id="document-meta"></p>
-            <label>译为 <select id="target-language"><option>简体中文</option><option>繁體中文</option><option>English</option><option>日本語</option><option>한국어</option><option>Français</option><option>Deutsch</option></select></label>
-            <label class="sync-control"><input id="sync-scroll" type="checkbox" checked> 同步滚动</label>
-            <label>并发请求 <select id="translation-concurrency"><option value="1">1 个</option><option value="2">2 个</option><option value="3" selected>3 个（推荐）</option><option value="4">4 个</option><option value="6">6 个</option><option value="8">8 个</option><option value="12">12 个</option></select></label>
-            <small class="field-help">适当提高并发可减少等待；8/12 需要服务商允许，遇到限流请调低。顺序模式可参考完整的前文译文。</small>
-            <label>每次请求 <select id="translation-batch-size"><option value="1">1 段（兼容）</option><option value="3">3 段（快速）</option><option value="5" selected>5 段</option></select></label>
-            <small id="batch-help" class="field-help">合并同页段落，减少请求和重复上下文。</small>
-            <label>译文视图 <select id="translation-view"><option value="pdf">原版式 PDF</option><option value="paragraph">段落</option></select></label>
-            <label class="sync-control"><input id="translation-edit" type="checkbox"> 开启译文编辑</label>
-            <small class="field-help">默认关闭，可选中文字进行解释、引用和高亮。开启后可双击译文段落编辑。</small>
-            <small class="field-help">每页译完后自动更新 PDF；阅读时可连续下滑跨页，后续页面继续翻译。</small>
-            <button id="refresh-layout" class="button subtle">重新排版</button>
-            <a id="download-pdf" class="button subtle hidden">下载译文 PDF</a>
-            <details id="layout-details"><summary id="layout-status" role="status">准备排版</summary><ul id="layout-issues"></ul></details>
-            <div class="menu-actions"><button id="translate-all" class="button primary">✦ 翻译全文</button><button id="translate-page" class="button secondary">翻译本页</button></div>
-            <button id="context-button" class="button subtle">术语与要求</button>
-            <button id="reader-settings" class="button subtle">Agent 设置</button>
-            <a id="export" class="button subtle">导出对照</a>
-            <button id="focus-reading" class="button subtle">隐藏工具栏 · 专注阅读</button>
-            <div class="reader-footer"><span id="job-status" role="status">准备就绪</span><span id="translation-count"></span></div>
+            <div class="menu-actions"><button id="translate-all" class="button primary">翻译全文</button><button id="translate-page" class="button secondary">翻译本页</button></div>
+            <div class="reader-footer"><span id="job-status" role="status">就绪</span><span id="translation-count"></span></div>
+            <section class="menu-section" aria-label="翻译">
+              <h3>翻译</h3>
+              <label class="menu-field">译成 <select id="target-language"><option>简体中文</option><option>繁體中文</option><option>English</option><option>日本語</option><option>한국어</option><option>Français</option><option>Deutsch</option></select></label>
+              <label class="menu-field">同时请求 <select id="translation-concurrency"><option value="1">1 个</option><option value="2">2 个</option><option value="3" selected>3 个（推荐）</option><option value="4">4 个</option><option value="6">6 个</option><option value="8">8 个</option><option value="12">12 个</option></select></label>
+              <small class="field-help">越多越快。8 个、12 个要服务商允许，被限流就调低。选 1 个时，每段都能参考前面已译好的全部内容。</small>
+              <label class="menu-field">每次请求 <select id="translation-batch-size"><option value="1">1 段（兼容性最好）</option><option value="3">3 段（快速）</option><option value="5" selected>5 段（默认）</option></select></label>
+              <small id="batch-help" class="field-help">把同一页的几段放进一次请求，请求次数更少。</small>
+              <div class="menu-links">
+                <button id="context-button" class="button subtle">术语与要求</button>
+                <button id="reader-settings" class="button subtle">模型设置</button>
+                
+              </div>
+            </section>
+            <section class="menu-section" aria-label="阅读">
+              <h3>阅读</h3>
+              <label class="menu-field">译文显示为 <select id="translation-view"><option value="pdf">原版式 PDF</option><option value="paragraph">逐段文字</option></select></label>
+              <label class="menu-field">界面颜色 <select id="theme-select" aria-label="界面颜色"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+              <label class="sync-control"><input id="sync-scroll" type="checkbox" checked> 两侧同步滚动</label>
+              <label class="sync-control"><input id="translation-edit" type="checkbox"> 允许修改译文</label>
+              <small class="field-help">关着时，选中文字可以解释、引用、高亮；打开后，双击译文段落就能改。</small>
+              <div class="menu-links">
+                <button id="focus-reading" class="button subtle">隐藏工具栏，专心读（Esc 恢复）</button>
+              </div>
+            </section>
+            <section class="menu-section" aria-label="排版与导出">
+              <h3>排版与导出</h3>
+              <details id="layout-details"><summary id="layout-status" role="status">还没排版</summary><ul id="layout-issues"></ul></details>
+              <small class="field-help">每译完一页，右侧版面就更新一次，可以边读边等后面的页。</small>
+              <div class="menu-links">
+                <button id="refresh-layout" class="button subtle">重新排版</button>
+                <a id="download-pdf" class="button subtle hidden">下载译文 PDF</a>
+                <a id="export" class="button subtle">导出对照文本</a>
+                
+              </div>
+            </section>
           </div>
         </details>
       </div>
       <div class="progress-track"><div id="progress-bar"></div></div>
       <div class="reader-viewbar">
-        <div class="viewbar-source">原文<span>单击定位 · 拖动选词 · Ctrl+C 复制</span></div>
-        <div class="viewbar-translation"><span>译文</span><div class="zoom-controls" role="group" aria-label="原文与译文同步缩放">
-          <span id="zoom-hint" class="zoom-hint">同步缩放 · Ctrl＋滚轮</span>
-          <button id="zoom-out" class="icon-button" aria-label="缩小原文与译文" title="缩小">−</button>
-          <button id="zoom-reset" class="zoom-value" aria-label="恢复原始大小" title="恢复 100%">100%</button>
-          <button id="zoom-in" class="icon-button" aria-label="放大原文与译文" title="放大">＋</button>
-          <button id="zoom-fit" class="zoom-fit" title="两侧同步适应页面宽度">适应宽度</button>
+        <div class="viewbar-source"><span class="pane-tag">原文</span><span class="viewbar-hint">单击段落，两侧对齐 · 拖动选字，Ctrl+C 复制</span></div>
+        <div class="viewbar-translation"><span class="pane-tag accent"><span class="label-s">原文</span><span class="label-t">译文</span></span><div class="zoom-controls" role="group" aria-label="原文和译文一起缩放">
+          <span id="zoom-hint" class="zoom-hint">Ctrl + 滚轮缩放</span>
+          <span class="zoom-stepper">
+            <button id="zoom-out" class="icon-button" aria-label="缩小" title="缩小"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+            <button id="zoom-reset" class="zoom-value" aria-label="恢复 100%" title="恢复 100%">100%</button>
+            <button id="zoom-in" class="icon-button" aria-label="放大" title="放大"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+          </span>
+          <button id="zoom-fit" class="zoom-fit" title="两侧页面都撑满栏宽">适应宽度</button>
         </div></div>
       </div>
       <div class="reading-workspace"><div class="panes"><div id="source-pane" class="source-pane" role="region" aria-label="PDF 原文" tabindex="0"><div id="pdf-page" class="pages-stack"></div></div><div id="translation-pane" class="translation-pane" role="region" aria-label="译文" tabindex="0"></div></div>
-      <aside id="reading-assistant" class="reading-assistant hidden" aria-label="论文阅读助手"><div class="assistant-heading"><strong>论文助手</strong><button id="assistant-close" class="icon-button" aria-label="收起论文助手">×</button></div><nav id="assistant-tabs" aria-label="助手功能"><button data-assistant-tab="outline">目录</button><button data-assistant-tab="overview">概览</button><button data-assistant-tab="detail">精读</button><button data-assistant-tab="chat">问答</button></nav><p class="assistant-disclaimer">AI 功能按需调用当前模型并缓存。仅分析可提取文字，图像及缺失公式不作视觉识别。</p><p id="assistant-status" role="status" aria-live="polite"></p><div id="assistant-content"></div></aside></div>
-      <button id="exit-focus" class="button focus-exit" aria-label="退出专注阅读">显示工具栏 <kbd>Esc</kbd></button>
+      <aside id="reading-assistant" class="reading-assistant hidden" aria-label="历史分析"><div class="assistant-heading"><strong>历史分析</strong><button id="assistant-close" class="icon-button" aria-label="关闭历史分析">×</button></div><nav id="assistant-tabs" aria-label="历史分析内容"><button data-assistant-tab="outline">目录</button><button data-assistant-tab="overview">概览</button><button data-assistant-tab="detail">精读</button><button data-assistant-tab="chat">问答</button></nav><p class="assistant-disclaimer">旧版分析面板。点按钮才会调用模型，结果会存下来；只读取能提取的文字，不识别图片和公式截图。</p><p id="assistant-status" role="status" aria-live="polite"></p><div id="assistant-content"></div></aside></div>
+      <button id="exit-focus" class="button focus-exit" aria-label="显示工具栏">显示工具栏 <kbd>Esc</kbd></button>
     </section>
   </main>
   <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
-  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><div class="eyebrow">BRING YOUR OWN AGENT</div><h2>连接你的 Agent</h2></div><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><p class="dialog-description">使用你已有的接口和模型，让翻译遵循你的方式。</p>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><h2>模型设置</h2><p class="dialog-description">设置翻译和 AI 助读使用的接口与模型。</p></div><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div>
     <label>接口类型<select name="mode" id="agent-mode"><option value="openai">OpenAI 兼容接口</option><option value="custom">自定义 HTTP JSON 接口</option></select></label>
-    <label id="url-label">Base URL<input name="base_url" type="url" placeholder="https://api.apigoto.com/v1" required></label><small id="url-help" class="field-help">自动追加 /chat/completions，也可填写完整端点。</small>
-    <div class="form-row"><label for="api-key">API Key<span class="api-key-field"><input id="api-key" name="api_key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="输入一次，保存后自动读取"><button id="toggle-api-key" type="button" aria-label="显示 API Key" aria-controls="api-key" aria-pressed="false">显示</button></span></label><label>模型名称<input name="model" placeholder="填写服务商支持的模型 ID"></label></div>
-    <small class="field-help">保存配置后，密钥保存在当前浏览器的本机存储中（未加密），默认隐藏显示。<button id="clear-api-key" type="button" class="text-button">清除已保存密钥</button></small>
-    <label>思考强度<select name="reasoning" id="agent-reasoning"><option value="">服务端默认</option><option value="off">关闭思考</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="max">最高（仅部分服务商）</option></select></label>
-    <small id="reasoning-help" class="field-help">仅 OpenAI 兼容接口生效。默认不发送思考参数；各服务商支持范围不同，不支持时请改回服务端默认。</small>
-    <div id="custom-fields" class="hidden"><label>请求 JSON 模板<textarea name="template" rows="4" spellcheck="false"></textarea></label><small class="field-help">可用变量：{{prompt}}（含翻译要求和上下文）、{{text}}、{{target}}、{{model}}。认证使用 Bearer Token。</small><label>译文响应字段路径<input name="response_path" placeholder="output 或 data.text 或 choices.0.message.content"></label></div>
-    <label>请求超时（秒）<input name="timeout" type="number" min="10" max="600" value="120"></label>
+    <label id="url-label">接口地址（Base URL）<input name="base_url" type="url" placeholder="https://your-provider.example/v1" required></label><small id="url-help" class="field-help">会自动补上 /chat/completions，也可以直接填完整地址。</small>
+    <div class="form-row"><label for="api-key">API Key<span class="api-key-field"><input id="api-key" name="api_key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="保存后下次自动填入"><button id="toggle-api-key" type="button" aria-label="显示 API Key" aria-controls="api-key" aria-pressed="false">显示</button></span></label><label>模型名称<input name="model" placeholder="服务商给的模型 ID"></label></div><p class="field-help">保存后，配置和密钥保存在当前浏览器的本机存储中（未加密），下次自动读取。</p>
+    <small class="field-help"><button id="clear-api-key" type="button" class="text-button">清除已保存的密钥</button></small>
+    <label>思考强度<select name="reasoning" id="agent-reasoning"><option value="">服务端默认</option><option value="off">关闭思考</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="max">最高（部分服务商支持）</option></select></label>
+    <small id="reasoning-help" class="field-help">只对 OpenAI 兼容接口有效。选「服务端默认」就不发送这个参数；服务商不支持时请改回它。</small>
+    <div id="custom-fields" class="hidden"><label>请求 JSON 模板<textarea name="template" rows="4" spellcheck="false"></textarea></label><small class="field-help">可用变量：{{prompt}}（含翻译要求和上下文）、{{text}}、{{target}}、{{model}}。认证方式为 Bearer Token。</small><label>译文在响应里的字段路径<input name="response_path" placeholder="output、data.text 或 choices.0.message.content"></label></div>
+    <label>超时（秒）<input name="timeout" type="number" min="10" max="600" value="120"></label>
     <p id="connection-status" class="connection-status" role="status"></p>
-    <div class="dialog-footer"><button id="test-connection" type="button" class="button secondary">测试连接</button><button id="reset-agent" type="button" class="button subtle">恢复默认</button><button type="submit" class="button primary">保存配置</button></div>
+    <div class="dialog-footer"><button id="test-connection" type="button" class="button secondary">测试连接</button><button id="reset-agent" type="button" class="button subtle">恢复默认</button><button type="submit" class="button primary">保存</button></div>
   </form></dialog>
-  <dialog id="context-dialog"><form id="context-form"><div class="dialog-heading"><div><div class="eyebrow">A LITTLE CONTEXT GOES A LONG WAY</div><h2>让译文更懂你的领域</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div><label>术语表<textarea id="glossary" rows="6" placeholder="每行一条，例如：&#10;attention = 注意力&#10;embedding = 嵌入&#10;agent = 智能体"></textarea></label><label>翻译要求<textarea id="instructions" rows="4" placeholder="例如：这是机器学习论文，使用学术表达；保留缩写与公式，术语首次出现时附英文。"></textarea></label><p class="field-help">应用于之后的翻译请求；已有译文不会自动改写。设置仅保存在本机浏览器。</p><div class="dialog-footer"><button class="button primary" type="submit">保存要求</button></div></form></dialog>
-  <dialog id="edit-dialog"><form id="edit-form"><div class="dialog-heading"><h2>编辑译文</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><p id="edit-source" class="edit-source"></p><label>译文<textarea id="edit-text" rows="10" maxlength="60000"></textarea></label><div class="dialog-footer"><button type="submit" class="button primary">保存译文</button></div></form></dialog>
+  <dialog id="context-dialog"><form id="context-form"><div class="dialog-heading"><div><h2>术语与要求</h2><p class="dialog-description">对所有文档生效。只影响之后的翻译，已有译文不会自动改；内容只存在这个浏览器里。</p></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div><label>术语表<textarea id="glossary" rows="6" placeholder="一行一条，例如：&#10;attention = 注意力&#10;embedding = 嵌入&#10;agent = 智能体"></textarea></label><label>翻译要求<textarea id="instructions" rows="4" placeholder="例如：机器学习论文，用学术书面语；缩写和公式保持原样，术语第一次出现时括注英文。"></textarea></label><div class="dialog-footer"><button class="button primary" type="submit">保存</button></div></form></dialog>
+  <dialog id="edit-dialog"><form id="edit-form"><div class="dialog-heading"><h2>修改译文</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><p id="edit-source" class="edit-source"></p><label>译文<textarea id="edit-text" rows="10" maxlength="60000"></textarea></label><div class="dialog-footer"><button type="submit" class="button primary">保存译文</button></div></form></dialog>
   <div id="toast" class="toast hidden" role="status"></div>
 </body>
 </html>

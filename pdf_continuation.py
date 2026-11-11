@@ -7,6 +7,7 @@ continues the first.  Detection uses only page geometry, reading order and the
 text itself; it never keys on a paper name, page number or block id.
 """
 import re
+import unicodedata
 
 # A sentence that is actually finished.  Closing quotes/brackets may follow the
 # punctuation.  Citation brackets do not count, so a mid-sentence "[13]" tail is
@@ -21,6 +22,8 @@ _LOWER_START = re.compile(r"^\s*[\"'“‘（(]?[a-z]")
 # of a column.  Those are not paragraphs and must not start a pair.
 _CAPTION = re.compile(r"^\s*(?:fig(?:ure)?|table|algorithm|图|表)\s*\.?\s*(?:\d|[IVXLC]+\b)", re.I)
 _REFERENCE = re.compile(r"^\s*(?:\[\d{1,4}\]|\d{1,4}\.\s)")
+_EMBEDDED_REFERENCE = re.compile(
+    r"\n\s*(?:\[\d{1,4}\]|\d{1,4}\.)\s+(?:[A-Z]\.\s|[A-Z][A-Za-z'-]+,)")
 _AFFILIATION = re.compile(r"@|universit|institut|department|school|academy|college|大学|学院|研究所", re.I)
 
 MIN_PROSE_WORDS = 10
@@ -37,7 +40,8 @@ def _words(text):
 def _prose_block(block):
     """A running-text block, not a title, author line, caption or table."""
     text = (block.get("text") or "").strip()
-    if not text or _CAPTION.match(text) or _REFERENCE.match(text) or _AFFILIATION.search(text):
+    if (not text or _CAPTION.match(text) or _REFERENCE.match(text)
+            or _EMBEDDED_REFERENCE.search(text) or _AFFILIATION.search(text)):
         return False
     box = block.get("bbox") or ()
     if len(box) != 4:
@@ -81,7 +85,8 @@ def _first_last(blocks):
     return ordered[0], ordered[-1]
 
 
-def _continues(first, second, first_lane, second_lane, second_page_top, cross_page):
+def _continues(first, second, first_lane, second_lane, second_page_top, cross_page,
+               following_blocks=()):
     """Strong geometric and textual evidence that `second` continues `first`.
 
     `first` must be the bottom of one column and `second` the top of the next
@@ -93,8 +98,10 @@ def _continues(first, second, first_lane, second_lane, second_page_top, cross_pa
     if not first or not second:
         return False
     one, two = first["bbox"], second["bbox"]
-    text_one = (first.get("text") or "").strip()
-    text_two = (second.get("text") or "").strip()
+    # Normalize comparison-only ligatures such as the leading "fi" in files.
+    # The saved text and block IDs remain untouched.
+    text_one = unicodedata.normalize("NFKC", (first.get("text") or "").strip())
+    text_two = unicodedata.normalize("NFKC", (second.get("text") or "").strip())
     if not text_one or not text_two:
         return False
     if _TERMINAL.search(text_one):
@@ -107,12 +114,20 @@ def _continues(first, second, first_lane, second_lane, second_page_top, cross_pa
         return False
     if two[1] > second_lane["top"] + EDGE_TOLERANCE:
         return False
-    # A page-break continuation resumes where the next page's text area
-    # begins.  If a figure, table or caption occupies its top, the next
-    # lower-case prose is not the rest of the previous sentence.  Same-page
-    # column changes sit under a title/abstract, so this test is page-only.
+    # A float may precede the continued paragraph on the next page. Allow
+    # that only with a caption above this same column; an unexplained gap or
+    # another prose paragraph still does not establish a continuation.
     if cross_page and two[1] > second_page_top + EDGE_TOLERANCE * 1.5:
-        return False
+        above = [block for block in following_blocks
+            if block.get("id") != second.get("id")
+            and len(block.get("bbox") or ()) == 4
+            and block["bbox"][3] <= two[1] + GEOMETRY_TOLERANCE
+            and min(block["bbox"][2], two[2]) - max(block["bbox"][0], two[0])
+            >= (two[2] - two[0]) * .5
+            and (block.get("text") or "").strip()]
+        nearest = max(above, key=lambda block: block["bbox"][3], default={})
+        if not _CAPTION.match((nearest.get("text") or "").strip()):
+            return False
     # Compare the block's offset from its own column edge, not its absolute x:
     # a column break moves the continuation to the next column, a page break
     # moves it back to the first column.  Width must still match.
@@ -150,9 +165,10 @@ def continuation_pairs(document):
     for (page_a, lane_a, _, last), (page_b, lane_b, first, _) in zip(sequence, sequence[1:]):
         if last is None or first is None:
             continue
-        if page_b < page_a:
+        if page_b < page_a or page_b > page_a + 1:
             continue
-        if not _continues(last, first, lane_a, lane_b, tops[page_b], page_b > page_a):
+        if not _continues(last, first, lane_a, lane_b, tops[page_b], page_b > page_a,
+                          pages[page_b].get("blocks") or []):
             continue
         pairs.append({"page": page_a + 1, "block": last.get("id"),
                       "next_page": page_b + 1, "next_block": first.get("id")})
@@ -168,6 +184,7 @@ def continuation_map(document):
     """
     hints = {}
     for pair in continuation_pairs(document):
-        hints.setdefault(pair["block"], {})["continues"] = True
+        hints.setdefault(pair["block"], {}).update(
+            continues=True, continues_to=pair["next_block"])
         hints.setdefault(pair["next_block"], {})["continues_from"] = pair["block"]
     return hints

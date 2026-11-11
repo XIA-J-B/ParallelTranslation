@@ -8,6 +8,8 @@ import pymupdf
 from fastapi.testclient import TestClient
 
 import app as service
+import reading_text
+from paper_analysis import digest, source_rows
 
 
 def sample_pdf():
@@ -86,6 +88,36 @@ class PerfPathTests(unittest.TestCase):
             service.load_doc(doc["id"])
             service.load_doc(doc["id"])
         self.assertEqual(opened.call_count, 0)
+
+    def test_public_continuation_hints_do_not_change_saved_data_reading_digests_or_text_cache(self):
+        with pymupdf.open() as pdf:
+            page = pdf.new_page(width=595, height=842)
+            page.insert_textbox((60, 690, 530, 790),
+                'The controller consumes measurements from all robots and the experimental procedure uses multiple model',
+                fontsize=12)
+            page = pdf.new_page(width=595, height=842)
+            page.insert_textbox((60, 70, 530, 180),
+                'files that contain the physical properties of the vehicles and all parameters required by the simulator.',
+                fontsize=12)
+            response = self.client.post('/api/documents', files={'file': ('continuation.pdf', pdf.tobytes(), 'application/pdf')})
+        self.assertEqual(response.status_code, 200)
+        public = response.json()
+        self.assertTrue(public['continuations'])
+        doc_id = public['id']
+        path = self.data / doc_id / 'document.json'
+        saved_bytes = path.read_bytes()
+        stored = service.load_doc(doc_id)
+        self.assertNotIn('continuations', stored)
+        pages_digest, rows_digest = digest(stored['pages']), digest(source_rows(stored))
+        layer = reading_text.text_layer(service, doc_id, 1)
+        reopened = self.client.get(f'/api/documents/{doc_id}').json()
+        self.assertEqual(reopened, public)
+        self.assertEqual(digest(reopened['pages']), pages_digest)
+        self.assertEqual(digest(source_rows(reopened)), rows_digest)
+        self.assertEqual(path.read_bytes(), saved_bytes)
+        self.assertIs(service.load_doc(doc_id), stored)
+        self.assertIs(reading_text.text_layer(service, doc_id, 1), layer)
+        self.assertNotIn('continuations', stored)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pymupdf
 
-FONT_CACHE_VERSION = 2
+FONT_CACHE_VERSION = 3
 FONT_CACHE_LIMIT = 48
+BUNDLED_FONT = Path(__file__).resolve().parent / "static" / "fonts" / "noto-serif-sc" / "NotoSerifSC-VF.ttf"
+FONT_WEIGHTS = (400, 600)
 
 
 def space_cjk_latin(text):
@@ -35,6 +37,10 @@ def space_cjk_latin(text):
 
 @lru_cache(maxsize=1)
 def font_source():
+    # A checked-in, licensed font makes the same document look the same on a
+    # fresh installation. System fonts remain a recovery path for older copies.
+    if BUNDLED_FONT.is_file():
+        return str(BUNDLED_FONT), str(BUNDLED_FONT), "思源宋体（Noto Serif SC）"
     fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
     for regular, bold, label in [
         (fonts / "NotoSerifSC-VF.ttf", fonts / "NotoSerifSC-VF.ttf", "思源宋体（Noto Serif SC）"),
@@ -45,11 +51,34 @@ def font_source():
     return None
 
 
+@lru_cache(maxsize=8)
+def _font_fingerprint(path, size, mtime_ns):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def font_signature():
     source = font_source()
     if source is None:
         return "builtin-serif"
-    return [(path, Path(path).stat().st_size, Path(path).stat().st_mtime_ns) for path in source[:2]]
+    fonts = []
+    for path, weight in zip(source[:2], FONT_WEIGHTS):
+        stat = Path(path).stat()
+        fonts.append({"sha256": _font_fingerprint(path, stat.st_size, stat.st_mtime_ns),
+                      "weight": weight})
+    return {"fonts": fonts, "oblique_degrees": 12, "derivative_version": FONT_CACHE_VERSION}
+
+
+def _name_face(font, style):
+    # Variable fonts can retain a typographic subfamily such as ExtraLight
+    # after instancing. MuPDF prefers it over the legacy style name, so keep
+    # every family/style record in agreement with the generated outlines.
+    values = {1: "ParallelBook", 2: style, 4: "ParallelBook " + style,
+              6: "ParallelBook-" + style.replace(" ", ""),
+              16: "ParallelBook", 17: style, 21: "ParallelBook", 22: style}
+    font['name'].names = [record for record in font['name'].names if record.nameID not in values]
+    for identifier, value in values.items():
+        font['name'].setName(value, identifier, 3, 1, 0x409)
+        font['name'].setName(value, identifier, 1, 0, 0)
 
 
 @lru_cache(maxsize=8)
@@ -59,7 +88,7 @@ def subset_fonts(characters, regular, bold):
     from fontTools.varLib.instancer import instantiateVariableFont
 
     results = []
-    for path, weight in ((regular, 400), (bold, 600)):
+    for path, weight in zip((regular, bold), FONT_WEIGHTS):
         font = TTFont(path, fontNumber=0)
         options = subset.Options()
         options.recalc_timestamp = False
@@ -73,11 +102,10 @@ def subset_fonts(characters, regular, bold):
             instantiateVariableFont(font, {"wght": weight}, inplace=True)
         # Give the embedded derivative its own family; the glyphs use real
         # regular/semibold masters rather than the variable font's thin default.
-        for identifier, value in ((1, "ParallelBook"), (2, "Regular" if weight == 400 else "SemiBold"),
-                                  (4, "ParallelBook Regular" if weight == 400 else "ParallelBook SemiBold"),
-                                  (6, "ParallelBook-Regular" if weight == 400 else "ParallelBook-SemiBold")):
-            font["name"].setName(value, identifier, 3, 1, 0x409)
+        _name_face(font, "Regular" if weight == 400 else "SemiBold")
         font["OS/2"].usWeightClass = weight
+        font['OS/2'].fsSelection = (font['OS/2'].fsSelection & ~(1 | 32 | 64)) | (64 if weight == 400 else 32)
+        font['head'].macStyle = (font['head'].macStyle & ~3) | (0 if weight == 400 else 1)
         output = io.BytesIO()
         font.save(output)
         font.close()
@@ -118,9 +146,7 @@ def oblique_font(data):
         font['hhea'].caretSlopeRise = 1000
         font['hhea'].caretSlopeRun = round(slant * 1000)
         style = 'Italic' if font['OS/2'].usWeightClass == 400 else 'SemiBold Italic'
-        for identifier, value in ((2, style), (4, 'ParallelBook ' + style),
-                                  (6, 'ParallelBook-' + style.replace(' ', ''))):
-            font['name'].setName(value, identifier, 3, 1, 0x409)
+        _name_face(font, style)
         output = io.BytesIO()
         font.save(output)
         return output.getvalue()

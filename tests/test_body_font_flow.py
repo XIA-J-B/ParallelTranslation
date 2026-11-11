@@ -83,9 +83,12 @@ class BodyFontFlowTests(unittest.TestCase):
             sizes[block["id"]] = {round(s["size"], 2) for s in spans if any("\u3400" <= c <= "\u9fff" for c in s["text"])}
         return pdf[0], report, blocks, paragraph_ids, sizes
 
-    def test_local_fitting_reproduces_mixed_body_sizes(self):
-        _, _, _, ids, sizes = self.render(grouped=False)
-        self.assertGreater(len(set(size for key in ids for size in sizes[key])), 1)
+    def test_local_fitting_cannot_silently_shrink_isolated_body(self):
+        _, report, _, ids, sizes = self.render(grouped=False)
+        self.assertEqual({size for key in ids if key in sizes for size in sizes[key]}, {10})
+        unresolved = set(ids) - set(sizes)
+        retained = {item["block_id"] for item in report["issues"] if item["kind"] == "font_size"}
+        self.assertLessEqual(unresolved, retained)
 
     def test_body_runs_keep_nominal_size_across_columns_pages_sizes_and_rotation(self):
         cases = [(1, 595, 842, 10, 0, False), (2, 612, 792, 10, 90, False),
@@ -108,13 +111,17 @@ class BodyFontFlowTests(unittest.TestCase):
                 positions = [pdf_layout.source_rect(page, {"bbox": report["placements"][key]}) for key in ids]
                 self.assertFalse(any(pdf_layout.overlap(a, b) > .1 for i, a in enumerate(positions) for b in positions[i + 1:]))
 
-    def test_dense_body_uses_one_shared_scale_without_losing_text(self):
-        _, report, _, ids, sizes = self.render(dense=True)
-        self.assertEqual(report["preserved"], 0, report["issues"])
-        shared = set(size for key in ids for size in sizes[key])
-        self.assertEqual(len(shared), 1, sizes)
-        self.assertGreaterEqual(min(shared), 8)
-        self.assertLess(max(shared), 10)
+    def test_dense_body_preserves_complete_source_when_nominal_size_cannot_fit(self):
+        page, report, blocks, ids, sizes = self.render(dense=True)
+        self.assertGreater(report["preserved"], 0)
+        self.assertEqual({size for key in ids if key in sizes for size in sizes[key]}, {10})
+        retained = {item["block_id"] for item in report["issues"] if item["kind"] == "font_size"}
+        for block in blocks:
+            if block["id"] in retained:
+                text = page.get_text(clip=pdf_layout.source_rect(page, block))
+                self.assertFalse(Counter(c for c in block["text"] if not c.isspace())
+                                 - Counter(c for c in text if not c.isspace()))
+                self.assertTrue(block["translation"])
 
     def test_fixed_graphic_is_a_barrier_to_shared_space(self):
         _, _, _, ids, sizes = self.render(barrier=True)

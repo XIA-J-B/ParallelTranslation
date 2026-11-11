@@ -39,6 +39,12 @@ A local-first PDF translation workspace with side-by-side reading, layout-aware 
 
 ## Changelog
 
+### 2026-11-11 Fonts, paragraphs, and translation continuity
+
+- **Consistent font source**: Chinese PDFs prefer the bundled Noto Serif SC family for regular and semibold text. Missing symbols use individual fallback glyphs.
+- **Body consistency**: layout respects source paragraph boundaries, font sizes, and safe space within each column, while keeping headings, figures, tables, and equations separate.
+- **Page and column continuations**: reliably detected fragments receive source context from both sides; when both fragments are queued, the later one waits for its predecessor to be saved. Translating a fragment on its own uses any existing predecessor translation. Legacy bibliography fragments receive complete entries as read-only context only when reconstruction is reliable. Stable block IDs remain unchanged, existing translations are not automatically regenerated, and complex regions may still retain their original content with a reported reason.
+
 ### 2026-11-07 Page-spanning paragraphs, formula integrity, and performance
 
 - **Paragraphs split across pages or columns:** paragraphs cut at a page or column boundary are detected automatically. The translated fragment at the page bottom is stretched within the source fragment's height to remove large gaps. The translation prompt asks the model to continue the previous fragment without repeating words already translated, and forbids inventing an ellipsis when the source has none, retrying once when needed.
@@ -158,7 +164,7 @@ Only non-streaming JSON responses completed in one request are supported. SSE, p
 4. Click a paragraph to locate its counterpart; click blank space to clear the selection. Double-click translated text to edit, or select the paragraph editing view from the top-right menu.
 5. Use the menu to change language, concurrency, batch size, synchronized scrolling, or reading mode; regenerate the layout; download the PDF; or export bilingual Markdown.
 
-The default is **3 concurrent requests**, configurable up to **12**. OpenAI-compatible endpoints combine up to **3 same-page paragraphs** per request by default, with 1 / 3 / 5 paragraph options. Custom endpoints use individual paragraph requests. Temporary failures receive at most two automatic retries; retries may incur additional charges.
+The default is **3 concurrent requests**, configurable up to **12**. OpenAI-compatible endpoints combine up to **5 same-page paragraphs / 12,000 characters** per request by default, with 1 / 3 / 5 paragraph options. Long paragraphs and detected page or column continuations use separate requests; a continuation waits for any predecessor queued in the same run to be saved while unrelated work remains concurrent. Custom endpoints use individual paragraph requests. Temporary failures receive at most two automatic retries; retries may incur additional charges.
 
 Pausing stops new requests while letting in-flight requests finish and save their results. Keep the page open during translation. After a refresh, reopen a document from the library to resume saved progress.
 
@@ -193,13 +199,13 @@ This is a single-user local application. It listens on `127.0.0.1` by default an
 - Scans require OCR for translation and text selection; full-paper visual reading can inspect page images.
 - Columns, rotation, headings, author information, inline symbols, drop caps, and references use general layout rules. Complex documents can still have extraction or typesetting errors.
 - A cover title extracted as several text blocks is merged into one title group and typeset with the source title's size and weight. Author affiliation markers stay superscripted regardless of whether they follow the surname directly, a comma, a space, or a footnote symbol. Rotated covers and titles that do not start on the first page still follow the conservative per-block path.
-- A bibliography that cannot be rebuilt into complete entries (multi-page lists, unquoted book titles, non-contiguous numbering) is retained as a whole and explained in the layout report, so one entry is never mixed between languages or overwritten by an expanded translation. The heading itself is still translated. Continuation pages without recognizable numbering are treated as ordinary text.
+- References are reconstructed from numbering, quoted titles, or a continuous italic title run, including previously saved fragments. Translated titles use the source font size while authors and publication details stay in the source language. Missing translations, incomplete entries, ambiguous numbering, or unsafe link mapping retain the original and receive a report entry; saved paragraph IDs stay unchanged.
 - Web links and in-document jumps (citations, figures, contents) are re-anchored onto the translation. When a rewritten anchor text cannot be located, an external link is no longer clickable and the layout report says so; internal jumps fall back to their original position. Link color is inherited from the source; decorative underlines are not rebuilt. The reader only draws a click overlay for links that can be reliably located or whole-block anchored; jumps kept at their original position remain clickable in the exported PDF.
 - A model may return one paragraph as several lines; the layout and reader merge soft line breaks inside one source paragraph (line-structured lists and notation blocks keep their breaks). The edit dialog and saved translation text are not rewritten.
-- Display equations, complex tables, vertical text, or text that cannot fit safely may retain the complete original. Tables generally retain their contents while their captions and notes are translated.
-- Text inside images is not recognized or replaced. Translation progress counts saved paragraph translations, not the proportion of PDF regions successfully replaced.
+- Table translations are matched to geometrically identified cells, preserving source sizes, rules, numbers, and superscripts. Independently positioned figure labels avoid actual graphic ink; labels originally painted over an image stay within their original footprint. Images are neither moved nor redrawn. Ambiguous mappings, complex math, vertical prose, and regions without enough safe space retain the original and are reported.
+- Raster-only labels without an independent text layer are not recognized or replaced. Translation progress counts saved paragraph translations, not the proportion of PDF regions successfully replaced.
 - The source is displayed as rendered pages with paragraph interactions. Free text selection, full-text search, and embedded PDF annotations are not implemented in the source reader.
-- Chinese typesetting first looks for locally installed Noto Serif SC or DengXian fonts, then uses a built-in fallback. Appearance may vary across systems.
+- Chinese PDF typesetting prefers the bundled `static/fonts/noto-serif-sc/NotoSerifSC-VF.ttf` (Noto Serif SC). If that file is missing, it tries locally installed Noto Serif SC, then DengXian, and finally a built-in fallback. Fallback appearance may differ; see [third-party notices](THIRD_PARTY_NOTICES.md) for the font source and license.
 - Review generated content and retained regions, especially equations, tables, important numbers, and technical terminology.
 
 ## Development

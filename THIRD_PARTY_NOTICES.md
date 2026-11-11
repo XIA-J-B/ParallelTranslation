@@ -38,9 +38,13 @@ These reading guides and browser assets are distributed with the application and
 
 ## Fonts / 字体
 
-No system font files are redistributed in this repository. The app may read locally installed Noto Serif SC or Microsoft DengXian fonts, subset them, and embed supported glyphs into generated PDFs. Relevant font licenses and embedding permissions still apply. PyMuPDF's built-in fonts retain their upstream terms.
+The application bundles the unmodified Noto Serif SC variable font under the SIL Open Font License 1.1. The font, license, pinned upstream commit, and SHA-256 hashes are in [static/fonts/noto-serif-sc](static/fonts/noto-serif-sc/UPSTREAM.json). PDF subsets and synthetic oblique derivatives are named ParallelBook; the browser's translation paragraphs use the same source font. Font derivatives retain the OFL license and embedded copyright notices.
 
-本仓库不分发系统字体。应用可能读取本机的 Noto Serif SC 或微软等线字体，对字形做子集处理并嵌入生成的 PDF。相关字体许可与嵌入权限仍然适用；PyMuPDF 内置字体资源也保留其上游条款。
+本项目随附采用 SIL Open Font License 1.1 的 Noto Serif SC（思源宋体风格）可变字体，原字体文件未经修改。许可、固定上游版本及 SHA-256 记录位于上述目录；PDF 字体子集与合成斜体以 ParallelBook 命名，译文段落视图使用同源字体。字体衍生文件保留 OFL 许可及内嵌版权说明。
+
+No Microsoft system font files are redistributed. If the bundled font is unavailable, older installations may fall back to locally installed Noto Serif SC or Microsoft DengXian; their embedding terms still apply. PyMuPDF's built-in fonts retain their upstream terms.
+
+本仓库不分发微软系统字体。随附字体不可用时，旧安装仍可回退至本机 Noto Serif SC 或等线，相关嵌入许可仍然适用；PyMuPDF 内置字体保留其上游条款。
 
 ## Documents and services / 文档与服务
 

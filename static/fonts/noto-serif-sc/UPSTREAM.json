@@ -1,0 +1,27 @@
+{
+  "family": "Noto Serif SC",
+  "license": "OFL-1.1",
+  "repository": "https://github.com/google/fonts",
+  "commit": "8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5",
+  "weights": {
+    "regular": 400,
+    "semibold": 600
+  },
+  "files": {
+    "NotoSerifSC-VF.ttf": {
+      "url": "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf",
+      "sha256": "050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9",
+      "bytes": 25125512
+    },
+    "OFL.txt": {
+      "url": "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoserifsc/OFL.txt",
+      "sha256": "5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6",
+      "bytes": 4350
+    },
+    "METADATA.pb": {
+      "url": "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoserifsc/METADATA.pb",
+      "sha256": "e0c253c6f850fc3ef6e7fc398361133dd55acc408c931822a3f69cfac08554c2",
+      "bytes": 1373
+    }
+  }
+}

@@ -90,10 +90,19 @@ class CoverMetadataTests(unittest.TestCase):
                 markers = [span for block in output[0].get_text("dict")["blocks"] if block["type"] == 0
                            for line in block["lines"] for span in line["spans"]
                            if span["text"].strip() in {"1", "2"} and span["size"] < 8]
-                self.assertGreaterEqual(len(markers), 3)
+                # The translated institution markers are raised. Unchanged
+                # author text retains the source glyphs, including baseline
+                # digits in this deliberately simple source fixture.
+                self.assertGreaterEqual(len(markers), 2)
+                self.assertTrue(all(abs(span['size'] - 10) < .01 for span in names))
+                self.assertTrue(all(span['font'] == 'Helvetica-Bold' for span in names))
 
     def test_affiliation_markers_after_commas_are_superscripted(self):
-        output, report, document = self.render(comma_markers=True)
+        def translate_authors(document):
+            for block in document['pages'][0]['blocks']:
+                if block['text'].startswith(('John', 'Alice')):
+                    block['translation'] = block['text'].replace('John Doe', '约翰·多伊').replace('Alice Example', '艾丽斯·示例')
+        output, report, document = self.render(comma_markers=True, edit=translate_authors)
         self.assertFalse(report["issues"], report)
         spans = [span for block in output[0].get_text("dict")["blocks"] if block["type"] == 0
                  for line in block["lines"] for span in line["spans"] if span["text"].strip()]
@@ -142,6 +151,52 @@ class CoverMetadataTests(unittest.TestCase):
         author = next(b for b in document["pages"][0]["blocks"] if b["text"].startswith("John"))
         contact = next(b for b in document["pages"][0]["blocks"] if "@lab.org" in b["text"])
         self.assertEqual(report["placements"][author["id"]], report["placements"][contact["id"]])
+
+    def test_unchanged_authors_keep_original_font_superscripts_size_and_links(self):
+        for rotation in (0, 90, 180, 270):
+            with self.subTest(rotation=rotation), tempfile.TemporaryDirectory() as temp:
+                source = pymupdf.open()
+                page = source.new_page(width=612, height=792)
+                page.insert_text((150, 80), 'A General Research Paper', fontsize=18)
+                page.insert_text((210, 130), 'Alice Example,', fontname='tiro', fontsize=11)
+                page.insert_text((278, 126), '1,2', fontname='tiro', fontsize=7)
+                page.insert_text((290, 130), 'Bob Scholar', fontname='tiro', fontsize=11)
+                page.insert_text((346, 126), '2', fontname='tiro', fontsize=7)
+                page.insert_textbox((100, 220, 520, 300), 'Abstract: This paragraph describes a general research method.', fontsize=10)
+                blocks = []
+                for index, item in enumerate(page.get_text('dict')['blocks']):
+                    text = '\n'.join(''.join(span['text'] for span in line['spans']) for line in item['lines'])
+                    box = pymupdf.Rect(item['bbox'])
+                    blocks.append({'id': f'cover-{index}', 'text': text, 'translation': text,
+                                   'target': '简体中文', 'native_box': list(box)})
+                author = next(block for block in blocks if 'Alice' in block['text'])
+                area = pymupdf.Rect(author['native_box'])
+                expected = [(span['font'], round(span['size'], 3), span['text'], span['origin'])
+                            for item in page.get_text('dict', clip=area)['blocks']
+                            for line in item['lines'] for span in line['spans']]
+                page.insert_link({'kind': pymupdf.LINK_URI, 'from': area, 'uri': 'https://example.org/authors'})
+                page.set_rotation(rotation)
+                for block in blocks:
+                    displayed = pymupdf.Rect(block.pop('native_box')) * page.rotation_matrix
+                    block['bbox'] = [displayed.x0/page.rect.width, displayed.y0/page.rect.height,
+                                     displayed.x1/page.rect.width, displayed.y1/page.rect.height]
+                path = Path(temp)/'source.pdf'
+                source.save(path)
+                source.close()
+                raw, report = pdf_layout.typeset(path, {'pages': [{'number': 1, 'blocks': blocks}]}, '简体中文')
+                with pymupdf.open(stream=raw, filetype='pdf') as output:
+                    actual = [(span['font'], round(span['size'], 3), span['text'], span['origin'])
+                              for item in output[0].get_text('dict', clip=area)['blocks']
+                              for line in item['lines'] for span in line['spans']]
+                    self.assertEqual([(font, size, text) for font, size, text, _ in actual],
+                                     [(font, size, text) for font, size, text, _ in expected])
+                    for original, placed in zip(expected, actual):
+                        self.assertAlmostEqual(original[3][0], placed[3][0], places=2)
+                        self.assertAlmostEqual(original[3][1], placed[3][1], places=2)
+                self.assertEqual(report['scaled'], 0)
+                self.assertIn(author['id'], report['placements'])
+                self.assertTrue(any(entry['reason'] == 'source-unchanged' for entry in report['typography']))
+                self.assertTrue(any(link.get('uri') == 'https://example.org/authors' for link in report.get('placed_links', [])))
 
 
 if __name__ == "__main__":

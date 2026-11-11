@@ -131,6 +131,38 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(context['next'], [])
         self.assertEqual(context['read_only_citation'], block['text'])
 
+    def legacy_fragments(self):
+        rows = [('heading', 'REFERENCES', .05, .07),
+                ('first', '[1] A. Author, “A complete', .10, .13),
+                ('middle', 'title,” Journal, 2020.\n[2] B. Author, “A second', .14, .18),
+                ('last', 'title,” Journal, 2021.', .19, .22)]
+        return {'name': 'legacy.pdf', 'pages': [{'number': 1, 'blocks': [
+            {'id': key, 'text': text, 'bbox': [.1, top, .5, bottom],
+             'translation': '已有译文', 'target': '简体中文'} for key, text, top, bottom in rows]}]}
+
+    def test_complete_legacy_citation_context_does_not_migrate_saved_fragments(self):
+        document = self.legacy_fragments()
+        before = copy.deepcopy(document)
+        current = document['pages'][0]['blocks'][2]
+        context = service.context_for(document, 2, service.TranslateRequest(agent=service.AgentConfig()))
+        self.assertEqual(context['current_source'], current['text'])
+        self.assertEqual([entry['number'] for entry in context['reference_context']], [1, 2])
+        self.assertIn('A complete title', context['reference_context'][0]['source'])
+        self.assertIn('A second title', context['reference_context'][1]['source'])
+        self.assertEqual(document, before)
+
+    def test_legacy_citation_context_rejects_missing_numbers_or_unclosed_titles(self):
+        document = self.legacy_fragments()
+        blocks = document['pages'][0]['blocks']
+        blocks[2]['text'] = blocks[2]['text'].replace('[2]', '[4]')
+        self.assertEqual(service.reference_context_for(document, blocks[1]), {})
+        document = self.legacy_fragments()
+        blocks = document['pages'][0]['blocks']
+        blocks[2]['text'] = blocks[2]['text'].replace('title,” Journal, 2020.', 'title still incomplete')
+        self.assertEqual(service.reference_context_for(document, blocks[1]), {})
+        blocks[0]['text'] = 'Numbered examples'
+        self.assertEqual(service.reference_context_for(document, blocks[2]), {})
+
     def test_single_translation_sends_title_and_restores_metadata(self):
         _, document = self.normalized()
         block = self.entries(document)[0]

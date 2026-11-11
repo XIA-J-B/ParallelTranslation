@@ -267,8 +267,23 @@ class LayoutTests(unittest.TestCase):
         output, report = pdf_layout.typeset(source, {"pages": [saved]}, "简体中文")
         self.assertIn("1", report["placements"])
         with pymupdf.open(stream=raw, filetype="pdf") as original, pymupdf.open(stream=output, filetype="pdf") as result:
-            clip = pymupdf.Rect(lines[0]["bbox"])
-            self.assertEqual(original[0].get_pixmap(clip=clip).samples, result[0].get_pixmap(clip=clip).samples)
+            original_ink = pdf_layout.text_ink_bounds(original[0].get_bboxlog(), pymupdf.Rect(lines[0]["bbox"]))
+            source_body_ink = pdf_layout.text_ink_bounds(original[0].get_bboxlog(), pymupdf.Rect(lines[1]["bbox"]))
+            self.assertIsNotNone(original_ink)
+            self.assertIsNotNone(source_body_ink)
+            # Font frames include blank descender padding and can overlap the
+            # next line without any formula glyph being changed. Check every
+            # formula ink pixel at high resolution, then independently require
+            # the original visible gap to the translated explanation.
+            clip = original_ink + (-.2, -.2, .2, .2)
+            matrix = pymupdf.Matrix(4, 4)
+            self.assertEqual(original[0].get_pixmap(clip=clip, matrix=matrix).samples,
+                             result[0].get_pixmap(clip=clip, matrix=matrix).samples)
+            placement = pymupdf.Rect([coordinate * 400 for coordinate in report["placements"]["1"]])
+            result_body_ink = pdf_layout.text_ink_bounds(result[0].get_bboxlog(), placement)
+            self.assertIsNotNone(result_body_ink)
+            self.assertGreaterEqual(result_body_ink.y0 - original_ink.y1,
+                                    source_body_ink.y0 - original_ink.y1 - .05)
             self.assertIn("运动物体", result[0].get_text())
             self.assertNotIn("where m", result[0].get_text())
 

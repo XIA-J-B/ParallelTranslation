@@ -191,7 +191,19 @@ def column_lanes(prepared, source_rects, page_width, prose):
 
 
 def caption(block):
-    return bool(re.match(r"^\s*(?:fig(?:ure)?[.\s]|table\b|algorithm\b|图\s*\d|表\s*\d)", block["text"], re.I))
+    if block.get("_caption_group"):
+        return True
+    # A running sentence such as "Figure 2 shows ..." is body text. A caption
+    # label has a delimiter, its own line, or a capitalized title after it.
+    match = re.match(r"^\s*(?:fig(?:ure)?\.?|table|algorithm|图|表)\s*"
+                     r"(?:\d+[A-Za-z]?|[IVXLC]+)(?:\b|(?=[\u3400-\u9fff]))(?P<tail>.*)$", block["text"], re.I | re.S)
+    if not match:
+        return False
+    tail = match["tail"]
+    return (not tail.strip() or bool(re.match(r"\s*[.:：。)）]", tail))
+            or "\n" in tail[:len(tail) - len(tail.lstrip())]
+            or bool(re.match(r"[ \t]+[A-Z\u3400-\u9fff]", tail))
+            or bool(re.match(r"[\u3400-\u9fff]", tail)))
 
 
 def source_flow_spacing(style, result, prior_style, prior_result, source_gap):

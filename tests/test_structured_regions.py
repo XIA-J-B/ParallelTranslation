@@ -193,12 +193,18 @@ class StructuredRegionTests(unittest.TestCase):
                                              if t.startswith('Here') else '实验验证了控制器的性能，结果表明这种方法是有效的。' * 2)
                 with output:
                     first = [s for s in self.spans(output[0]) if '在此' in s['text']]
-                    self.assertTrue(first, report)
                     if not fixed:
+                        self.assertTrue(first, report)
                         self.assertAlmostEqual(first[0]['size'], 10, delta=.01)
+                        self.assertIn('适当的参数', output[0].get_text().replace('\n', ''))
                     else:
-                        self.assertLess(first[0]['size'], 9.9)
-                    self.assertIn('适当的参数', output[0].get_text().replace('\n', ''))
+                        # A fixed rule separates these regions. The preferred
+                        # source-size policy retains the entire original block
+                        # rather than quietly reducing this one paragraph.
+                        self.assertFalse(first)
+                        self.assertIn('Here we explain the method and its parameters.', output[0].get_text())
+                        self.assertIn('The description continues on this second line.', output[0].get_text())
+                        self.assertTrue(any(item['kind'] == 'font_size' for item in report['issues']))
 
 
 if __name__ == '__main__':
