@@ -8,15 +8,15 @@ const showcase = {
   reader: { title: '原文在旁，译文在眼前。', description: '点一下段落，两边同步定位；翻译没结束，也能先读。', tags: ['同步滚动', '边译边读', '位置记忆'], alt: '真实双语阅读界面：左侧原文，右侧中文译文。' },
   quickread: { title: '先看清主线，再决定深读哪里。', description: '研究问题、方法、发现与局限，先看一遍。', tags: ['文章速读', '阅读路线', '原文引用'], alt: '真实文章速读界面：展示研究问题、方法主线、发现与建议阅读路线。' },
   citation: { title: '看不懂的这一句，直接问。', description: '带着选段追问，从回答里的引用回到原文。', tags: ['选段提问', '上下文解释', '来源回跳'], alt: '真实引用问答界面：带原文引用的问题、回答与左侧高亮的出处。' },
-  annotations: { title: '划重点，也记下想法。', description: '五色高亮，写下批注；汇总后一点回看。', tags: ['五色高亮', '文字批注', '原文回跳'], alt: '真实高亮与批注界面：原文黄色高亮、文字批注、批注汇总和编辑操作。' },
+  annotations: { title: '划选一句，想法就在旁边。', description: '拖选原文或译文，弹出批注、解释、引用与高亮。', tags: ['划选弹窗', '五色高亮', '文字批注'], alt: '真实软件中拖选原文后的浮动工具条：批注、解释、引用、高亮与五种颜色。' },
   notes: { title: '这次读懂的，下次还在。', description: '收藏有用回答，连同引用一起保存。', tags: ['本地笔记', '保留出处', 'Markdown 导出'], alt: '真实阅读笔记界面：保存的问题、回答、引用与 Markdown 导出按钮。' }
 };
 let selectedFeature = 'reader';
 let previewTheme = 'light';
 function setPreview(theme) {
   previewTheme = theme;
-  previewImage.src = `assets/${selectedFeature}-${theme}.png`;
-  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png`;
+  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=reader-lab-3`;
+  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=reader-lab-3`;
   previewImage.alt = showcase[selectedFeature].alt;
   dialogImage.src = previewImage.src;
   dialogImage.alt = previewImage.alt;
@@ -108,32 +108,81 @@ motionButton.addEventListener('click', () => {
 motionPreference.addEventListener('change', updateMotion);
 updateMotion();
 
-// Animate visible content once, without hiding anything before JS is ready.
-if ('IntersectionObserver' in window) {
-  const entrances = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      entrances.unobserve(entry.target);
-      if (root.dataset.motion !== 'on') continue;
-      const wide = innerWidth > 800;
-      const kind = entry.target;
-      let from = 'translateY(38px)';
-      if (kind.matches('.workbench')) from = 'perspective(1400px) translateY(60px) rotateX(5deg) scale(.96)';
-      if (wide && kind.matches('.capability-card')) from = `translate(${(Array.from(kind.parentElement.children).indexOf(kind) % 3 - 1) * 24}px, 32px)`;
-      if (wide && kind.matches('.download-intro')) from = 'translateX(-45px)';
-      if (wide && kind.matches('.download-card')) from = 'translateX(45px) rotate(2deg)';
-      const animation = entry.target.animate([
-        { opacity: 0, transform: from },
-        { opacity: 1, transform: 'translateY(0)' }
-      ], { duration: kind.matches('.workbench') ? 1050 : 850, delay: Number(entry.target.dataset.motionDelay || 0), easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
-      entranceAnimations.add(animation);
-      animation.finished.then(() => entranceAnimations.delete(animation), () => entranceAnimations.delete(animation));
-    }
-  }, { threshold: .08 });
-  document.querySelectorAll('.capability-card, .steps li').forEach((element, index) => {
-    element.dataset.motionDelay = String((index % 3) * 130);
+// Replay entrances from either direction after the content has fully left the viewport.
+// Layout coordinates stay stable while the element's own transform is animating.
+const entranceTargets = [...document.querySelectorAll('.section-heading, .workbench, .sample-workspace, .capability-card, .reading-note, .steps li, .download-intro, .download-card, .faq>div, .footer-top')];
+const entranceStates = new Map(entranceTargets.map(element => [element, { entered: false, animation: null }]));
+let entranceFrame = 0;
+let lastEntranceScroll = scrollY;
+let entranceDirection = 1;
+document.querySelectorAll('.capability-card, .steps li').forEach((element, index) => {
+  element.dataset.motionDelay = String((index % 3) * 100);
+});
+function stopEntrance(state) {
+  if (!state.animation) return;
+  entranceAnimations.delete(state.animation);
+  state.animation.cancel();
+  state.animation = null;
+}
+function scanEntrances() {
+  entranceFrame = 0;
+  if (document.hidden) return;
+  const currentScroll = scrollY;
+  if (Math.abs(currentScroll - lastEntranceScroll) > .5) entranceDirection = currentScroll > lastEntranceScroll ? 1 : -1;
+  lastEntranceScroll = currentScroll;
+  const inset = Math.min(40, innerHeight * .08);
+  const bounds = entranceTargets.map(element => {
+    let top = 0;
+    for (let parent = element; parent; parent = parent.offsetParent) top += parent.offsetTop;
+    return { element, top: top - currentScroll, bottom: top + element.offsetHeight - currentScroll };
   });
-  document.querySelectorAll('.section-heading, .workbench, .sample-workspace, .capability-card, .reading-note, .steps li, .download-intro, .download-card, .faq>div, .footer-top').forEach(element => entrances.observe(element));
+  for (const { element, top, bottom } of bounds) {
+    const state = entranceStates.get(element);
+    if (bottom <= -48 || top >= innerHeight + 48) {
+      state.entered = false;
+      stopEntrance(state);
+      continue;
+    }
+    if (state.entered || top >= innerHeight - inset || bottom <= inset) continue;
+    state.entered = true;
+    if (root.dataset.motion !== 'on' || element.contains(document.activeElement)) continue;
+    const direction = entranceDirection;
+    const wide = innerWidth > 800;
+    let from = `translateY(${direction * 34}px)`;
+    if (element.matches('.workbench')) from = `perspective(1400px) translateY(${direction * 48}px) rotateX(${direction * 4}deg) scale(.97)`;
+    if (wide && element.matches('.capability-card')) from = `translate(${(Array.from(element.parentElement.children).indexOf(element) % 3 - 1) * 24}px, ${direction * 30}px)`;
+    if (wide && element.matches('.download-intro')) from = `translate(-38px, ${direction * 18}px)`;
+    if (wide && element.matches('.download-card')) from = `translate(38px, ${direction * 18}px) rotate(${direction * 1.5}deg)`;
+    const animation = element.animate([
+      { opacity: 0, transform: from },
+      { opacity: 1, transform: 'none' }
+    ], { duration: element.matches('.workbench') ? 900 : 720, delay: Number(element.dataset.motionDelay || 0), easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+    animation.id = 'parallel-entrance';
+    state.animation = animation;
+    entranceAnimations.add(animation);
+    const release = () => {
+      entranceAnimations.delete(animation);
+      if (state.animation === animation) state.animation = null;
+    };
+    animation.finished.then(release, release);
+  }
+}
+function queueEntranceScan() {
+  if (!entranceFrame) entranceFrame = requestAnimationFrame(scanEntrances);
+}
+addEventListener('scroll', queueEntranceScan, { passive: true });
+addEventListener('resize', queueEntranceScan);
+document.addEventListener('visibilitychange', queueEntranceScan);
+document.addEventListener('focusin', event => {
+  for (const element of entranceTargets) if (element.contains(event.target)) stopEntrance(entranceStates.get(element));
+});
+if ('ResizeObserver' in window) {
+  const entranceSizes = new ResizeObserver(queueEntranceScan);
+  entranceTargets.forEach(element => entranceSizes.observe(element));
+}
+document.fonts?.ready.then(queueEntranceScan);
+queueEntranceScan();
+if ('IntersectionObserver' in window) {
   const heroVisibility = new IntersectionObserver(([entry]) => {
     root.dataset.heroVisible = String(entry.isIntersecting);
   });
