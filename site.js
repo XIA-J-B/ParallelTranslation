@@ -15,8 +15,8 @@ let selectedFeature = 'reader';
 let previewTheme = 'light';
 function setPreview(theme) {
   previewTheme = theme;
-  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=reader-lab-3`;
-  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=reader-lab-3`;
+  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=reader-lab-4`;
+  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=reader-lab-4`;
   previewImage.alt = showcase[selectedFeature].alt;
   dialogImage.src = previewImage.src;
   dialogImage.alt = previewImage.alt;

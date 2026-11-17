@@ -216,7 +216,10 @@
   document.addEventListener('selectionchange', queueSelectionCapture);
   document.addEventListener('pointerdown', event => {
     if (popover.contains(event.target)) { event.preventDefault(); return; }
-    hidePopover(); activeSelection = null; dragging = Boolean(event.target.closest('[data-selectable]'));
+    hidePopover(); activeSelection = null;
+    const selectable = event.target.closest('[data-selectable]');
+    dragging = Boolean(selectable);
+    if (selectable) selectable.focus({ preventScroll: true });
   });
   document.addEventListener('pointerup', () => { const wasSelecting = dragging; dragging = false; if (wasSelecting) queueSelectionCapture(); });
   document.addEventListener('pointercancel', () => { dragging = false; hidePopover(); });
@@ -233,7 +236,9 @@
         const range = document.createRange(); range.selectNodeContents(element); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
       }
       if (typeof selection.modify === 'function') {
-        event.preventDefault(); selection.modify('extend', ['ArrowLeft', 'ArrowUp'].includes(event.key) ? 'backward' : 'forward', ['ArrowUp', 'ArrowDown'].includes(event.key) ? 'line' : 'character'); captureSelection();
+        event.preventDefault();
+        const granularity = ['ArrowUp', 'ArrowDown'].includes(event.key) ? 'line' : event.ctrlKey || event.altKey ? 'word' : event.metaKey ? 'lineboundary' : 'character';
+        selection.modify('extend', ['ArrowLeft', 'ArrowUp'].includes(event.key) ? 'backward' : 'forward', granularity); captureSelection();
       }
     });
     element.addEventListener('click', event => {
