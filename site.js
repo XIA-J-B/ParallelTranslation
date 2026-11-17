@@ -8,15 +8,15 @@ const showcase = {
   reader: { title: '原文在旁，译文在眼前。', description: '点一下段落，两边同步定位；翻译没结束，也能先读。', tags: ['同步滚动', '边译边读', '位置记忆'], alt: '真实双语阅读界面：左侧原文，右侧中文译文。' },
   quickread: { title: '先看清主线，再决定深读哪里。', description: '研究问题、方法、发现与局限，先看一遍。', tags: ['文章速读', '阅读路线', '原文引用'], alt: '真实文章速读界面：展示研究问题、方法主线、发现与建议阅读路线。' },
   citation: { title: '看不懂的这一句，直接问。', description: '带着选段追问，从回答里的引用回到原文。', tags: ['选段提问', '上下文解释', '来源回跳'], alt: '真实引用问答界面：带原文引用的问题、回答与左侧高亮的出处。' },
-  annotations: { title: '划选一句，想法就在旁边。', description: '拖选原文或译文，弹出批注、解释、引用与高亮。', tags: ['划选弹窗', '五色高亮', '文字批注'], alt: '真实软件中拖选原文后的浮动工具条：批注、解释、引用、高亮与五种颜色。' },
+  annotations: { title: '原文留在眼前，想法写在旁边。', description: '页旁直接批注，保留作者与时间；点编号回到原文。', tags: ['页旁批注', '自定义署名', '原文定位'], alt: '真实软件的页旁批注：正文保持可见，右侧紧凑卡片显示头像、作者、时间和批注内容。' },
   notes: { title: '这次读懂的，下次还在。', description: '收藏有用回答，连同引用一起保存。', tags: ['本地笔记', '保留出处', 'Markdown 导出'], alt: '真实阅读笔记界面：保存的问题、回答、引用与 Markdown 导出按钮。' }
 };
 let selectedFeature = 'reader';
 let previewTheme = 'light';
 function setPreview(theme) {
   previewTheme = theme;
-  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=reader-lab-4`;
-  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=reader-lab-4`;
+  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=release-0.1.19`;
+  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=release-0.1.19`;
   previewImage.alt = showcase[selectedFeature].alt;
   dialogImage.src = previewImage.src;
   dialogImage.alt = previewImage.alt;

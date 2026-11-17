@@ -28,7 +28,7 @@
   const freshState = sample => ({ translation: sample.translation, draft: sample.translation, editing: false, marks: [], question: null, reference: null });
   const states = new Map(samples.map(sample => [sample.id, freshState(sample)]));
   const notes = new Map(), animations = new Set();
-  const popover = $('#selection-popover'), annotationDialog = $('#annotation-dialog');
+  const popover = $('#selection-popover'), annotationEditor = $('#annotation-editor');
   const original = $('#sample-quote'), translated = $('#sample-translation');
   let currentId = 'fairness', view = 'parallel', lastColor = 'yellow';
   let activeSelection = null, pendingAnnotation = null, dragging = false, selectionFrame = 0, nextMarkId = 1;
@@ -196,7 +196,7 @@
     $('#remove-selection-mark').hidden = !existing; positionPopover(rect);
   }
   function captureSelection() {
-    if (annotationDialog.open || dragging) return;
+    if (dragging) return;
     const selection = getSelection();
     if (!selection?.rangeCount || selection.isCollapsed) {
       if (activeSelection?.origin !== 'mark') { hidePopover(); activeSelection = null; }
@@ -258,7 +258,7 @@
   function upsertMark(selection, color, note) {
     const entry = states.get(selection.sampleId); let mark = entry.marks.find(item => item.id === selection.markId);
     if (!mark) { mark = { id: `mark-${nextMarkId++}`, scope: selection.scope, start: selection.start, end: selection.end, text: selection.text, color, note: '' }; entry.marks.push(mark); }
-    mark.color = color; if (note !== undefined) mark.note = note; return mark;
+    mark.color = color; if (note !== undefined) { mark.note = note; mark.createdAt ||= new Date().toISOString(); } return mark;
   }
   function applyHighlight(color) {
     if (!activeSelection) return;
@@ -269,19 +269,23 @@
   document.querySelectorAll('button[data-highlight]').forEach(item => item.addEventListener('click', () => applyHighlight(item.dataset.highlight)));
   $('#selection-highlight').addEventListener('click', () => applyHighlight(lastColor));
   function editAnnotation(selection) {
+    if (pendingAnnotation && $('#sample-annotation-input').value.trim()) {
+      showTool('marks'); $('#sample-annotation-input').focus(); say('请先保存或取消正在编辑的批注。'); return;
+    }
     pendingAnnotation = { ...selection }; const mark = states.get(selection.sampleId).marks.find(item => item.id === selection.markId);
-    $('#annotation-selection').textContent = selection.text; $('#sample-annotation-input').value = mark?.note || '';
-    hidePopover(); annotationDialog.showModal(); $('#sample-annotation-input').focus();
+    $('#sample-annotation-input').value = mark?.note || '';
+    hidePopover(); getSelection()?.removeAllRanges(); annotationEditor.hidden = false; showTool('marks');
+    $('#marks-empty').hidden = true; $('#sample-annotation-input').focus({ preventScroll: innerWidth > 800 });
   }
+  function closeAnnotation() { annotationEditor.hidden = true; pendingAnnotation = null; getSelection()?.removeAllRanges(); renderShelves(); }
   $('#selection-annotate').addEventListener('click', () => { if (activeSelection) editAnnotation(activeSelection); });
-  $('#close-annotation').addEventListener('click', () => annotationDialog.close());
-  $('#cancel-annotation').addEventListener('click', () => annotationDialog.close());
-  annotationDialog.addEventListener('close', () => { pendingAnnotation = null; getSelection()?.removeAllRanges(); });
+  $('#cancel-annotation').addEventListener('click', closeAnnotation);
+  $('#annotation-return').addEventListener('click', () => {if (pendingAnnotation) locate(pendingAnnotation.sampleId, pendingAnnotation.scope, pendingAnnotation.markId);});
   $('#annotation-form').addEventListener('submit', event => {
     event.preventDefault(); const text = $('#sample-annotation-input').value.trim(); if (!text || !pendingAnnotation) return;
     const old = states.get(pendingAnnotation.sampleId).marks.find(item => item.id === pendingAnnotation.markId);
     upsertMark(pendingAnnotation, old?.color || lastColor, text);
-    annotationDialog.close(); renderReader(); renderShelves(); showTool('marks'); say('批注已绑定到刚才选中的文字，可在列表中回看。');
+    closeAnnotation(); renderReader(); renderShelves(); showTool('marks'); say('批注已保存，点页码回到原文。');
   });
   $('#selection-explain').addEventListener('click', () => { if (activeSelection) { state().reference = { ...activeSelection }; hidePopover(); ask(0); } });
   $('#selection-cite').addEventListener('click', () => {
@@ -297,14 +301,21 @@
   function renderShelves() {
     const markItems = samples.flatMap(sample => states.get(sample.id).marks.map(mark => ({ sample, mark })));
     $('#mark-count').textContent = String(markItems.length); $('#note-count').textContent = String(notes.size);
-    $('#marks-empty').hidden = Boolean(markItems.length); $('#notes-empty').hidden = Boolean(notes.size);
+    $('#marks-empty').hidden = Boolean(markItems.length || pendingAnnotation); $('#notes-empty').hidden = Boolean(notes.size);
     $('#export-sample').disabled = !(notes.size || markItems.length || samples.some(sample => states.get(sample.id).translation !== sample.translation));
     $('#sample-mark-list').replaceChildren(...markItems.map(({ sample, mark }) => {
       const item = node('article', undefined, 'shelf-card'); item.dataset.savedMark = mark.id; item.style.setProperty('--mark-color', colors[mark.color][0]);
       const target = button(`${sample.label} · 第 ${sample.page} 页 · ${mark.scope === 'original' ? '原文' : '译文'} ↗`, () => locate(sample.id, mark.scope, mark.id), 'shelf-location');
       const actions = node('div', undefined, 'shelf-actions');
       actions.append(button(mark.note ? '编辑批注' : '写批注', () => editAnnotation({ ...mark, sampleId: sample.id, markId: mark.id })), button('删除', () => removeMark(sample.id, mark.id)));
-      item.append(target, node('blockquote', mark.text), ...(mark.note ? [node('p', mark.note)] : []), actions); return item;
+      if (mark.note) {
+        item.classList.add('sample-comment');
+        const header = node('header', undefined, 'sample-comment-header'), avatar = node('span', undefined, 'sample-comment-avatar');
+        avatar.setAttribute('aria-hidden', 'true'); avatar.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg>';
+        header.append(avatar, node('strong', '我'), node('small', new Date(mark.createdAt).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'})));
+        item.append(header, node('p', mark.note), target, actions);
+      } else item.append(target, node('blockquote', mark.text), actions);
+      return item;
     }));
     $('#sample-note-list').replaceChildren(...[...notes.values()].map(note => {
       const item = node('article', undefined, 'shelf-card'); item.dataset.savedNote = note.key; item.append(node('strong', note.title), node('p', note.answer));
@@ -331,7 +342,7 @@
   });
   $('#reset-sample').addEventListener('click', () => {
     for (const animation of animations) animation.cancel(); animations.clear();
-    hidePopover(); activeSelection = null; getSelection()?.removeAllRanges(); notes.clear(); matches = []; matchIndex = -1;
+    hidePopover(); activeSelection = null; pendingAnnotation = null; annotationEditor.hidden = true; getSelection()?.removeAllRanges(); notes.clear(); matches = []; matchIndex = -1;
     for (const sample of samples) states.set(sample.id, freshState(sample));
     $('#sample-search').value = ''; $('#search-count').textContent = ''; $('#previous-match').disabled = $('#next-match').disabled = true;
     setView('parallel'); selectSample('fairness'); renderShelves(); showTool('ask'); say('本次体验已重置。');
