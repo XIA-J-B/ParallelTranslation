@@ -223,14 +223,16 @@ button[data-highlight][aria-pressed=true]{box-shadow:0 0 0 2px var(--accent)}
 .shelf-actions button{font-size:10px;padding:2px 0}
 #panel-notes #export-sample{font-size:11px;padding:10px 15px;margin-top:18px}
 .lab-footnote{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:9px;color:var(--muted);padding:13px 22px;border-top:1px solid var(--line)}
-.selection-popover{position:fixed;z-index:150;width:284px;max-width:calc(100vw - 20px);box-sizing:border-box;padding:7px 10px 9px;border:1px solid #ffffff26;border-radius:12px;background:#202623;color:#f8faf8;box-shadow:0 8px 30px #0005;user-select:none;-webkit-user-select:none}
-.selection-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:2px;padding-bottom:5px;border-bottom:1px solid #ffffff22}
-.selection-actions button{font:500 13px var(--sans);border-radius:5px;padding:10px 3px;color:inherit}
-.selection-actions button:hover{background:#ffffff18}
-.selection-colors{display:flex;align-items:center;justify-content:space-evenly;gap:10px;padding-top:9px}
-.selection-colors button[data-highlight]{border:3px solid #202623;width:29px;height:29px;box-shadow:none;margin:0;background:var(--swatch)}
-.selection-colors button[data-highlight][aria-pressed=true]{box-shadow:0 0 0 2px #fff}
+.selection-popover{position:fixed;z-index:150;display:flex;flex-direction:column;gap:4px;width:max-content;max-width:calc(100vw - 20px);box-sizing:border-box;padding:5px;border:1px solid #ffffff1a;border-radius:12px;background:#1f2421;color:#f3f4f1;box-shadow:0 10px 28px #0005;user-select:none;-webkit-user-select:none}
+.selection-actions{display:flex;align-items:center;gap:2px}
+.selection-actions button{flex:1 1 auto;min-height:30px;padding:5px 10px;border-radius:7px;font:500 13px/1.4 var(--sans);color:inherit;white-space:nowrap}
+.selection-actions button:hover{background:#ffffff1f}
+.selection-colors{display:flex;align-items:center;justify-content:center;gap:4px;padding:3px 4px 0;border-top:1px solid #ffffff26}
+.selection-colors button[data-highlight]{display:grid;place-items:center;width:26px;height:26px;padding:0;margin:0;border:0;border-radius:50%;background:transparent;box-shadow:none}
+.selection-colors button[data-highlight]::before{content:"";width:18px;height:18px;box-sizing:border-box;border:2px solid transparent;border-radius:50%;background:var(--swatch)}
+.selection-colors button[data-highlight][aria-pressed=true]::before{border-color:#1f2421;box-shadow:0 0 0 2px #fff}
 .selection-popover button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@media(pointer:coarse){.selection-actions button{min-width:44px;min-height:44px;padding-inline:8px}.selection-colors{gap:2px;padding:2px 0 0}.selection-colors button[data-highlight]{width:44px;height:44px}}
 .sample-comment{border:1px solid var(--line);border-left:2px solid var(--mark-color,var(--accent));border-radius:3px;padding:10px 12px;background:var(--white)}
 .sample-comment-header{display:flex;align-items:center;gap:8px;margin-bottom:5px;font:12px/1.5 var(--sans)}
 .sample-comment-header strong{font:600 12px/1.5 var(--sans)}

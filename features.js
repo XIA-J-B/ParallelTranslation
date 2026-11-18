@@ -30,7 +30,11 @@
   const notes = new Map(), animations = new Set();
   const popover = $('#selection-popover'), annotationEditor = $('#annotation-editor');
   const original = $('#sample-quote'), translated = $('#sample-translation');
-  let currentId = 'fairness', view = 'parallel', lastColor = 'yellow';
+  let currentId = 'fairness', view = 'parallel', selectedColor = 'yellow';
+  try {
+    const saved = localStorage.getItem('parallel-site-highlight-color');
+    if (Object.hasOwn(colors, saved)) selectedColor = saved;
+  } catch {}
   let activeSelection = null, pendingAnnotation = null, dragging = false, selectionFrame = 0, nextMarkId = 1;
   let locatedSelection = null;
   let matches = [], matchIndex = -1;
@@ -92,23 +96,29 @@
     [...marks, ...found].forEach(item => { boundaries.add(item.start); boundaries.add(item.end); });
     if (anchor) { boundaries.add(anchor.start); boundaries.add(anchor.end); }
     const positions = [...boundaries].sort((a, b) => a - b), fragment = document.createDocumentFragment();
+    const keyboardStops = new Set();
     for (let index = 0; index < positions.length - 1; index++) {
       const start = positions[index], end = positions[index + 1];
       const covers = item => start >= item.start && end <= item.end;
-      const mark = marks.findLast(covers);
-      const paint = mark && (mark.color ? mark : marks.findLast(item => item.color && covers(item)));
+      const annotation = marks.findLast(item => item.note && covers(item));
+      const highlight = marks.findLast(item => !item.note && covers(item));
+      const mark = annotation || highlight;
       const match = found.find(item => start >= item.start && end <= item.end);
       const anchored = anchor && start >= anchor.start && end <= anchor.end;
       if (!mark && !match && !anchored) { fragment.append(document.createTextNode(text.slice(start, end))); continue; }
-      const span = node(paint ? 'mark' : 'span', text.slice(start, end));
+      const span = node(mark ? 'mark' : 'span', text.slice(start, end));
       if (mark) {
         span.dataset.markId = mark.id;
-        span.title = mark.note ? '查看批注操作' : '点击取消高亮，重新选中这段可改色';
-        if (paint) {
-          span.style.setProperty('--sample-highlight', colors[paint.color][0]);
-          span.classList.add('reader-mark');
+        span.title = annotation ? '查看页旁批注' : '查看高亮操作';
+        span.style.setProperty('--sample-highlight', colors[mark.color][0]);
+        span.classList.add('reader-mark');
+        if (annotation) span.classList.add('annotated-text');
+        if (!keyboardStops.has(mark.id)) {
+          span.tabIndex = 0;
+          span.setAttribute('role', 'button');
+          span.setAttribute('aria-label', span.title + '：' + mark.text);
+          keyboardStops.add(mark.id);
         }
-        if (mark.note) span.classList.add('annotated-text');
       }
       if (match) { span.classList.add('search-hit'); if (matches[matchIndex] === match) span.classList.add('current-hit'); }
       if (anchored) span.classList.add('annotation-anchor');
@@ -204,22 +214,19 @@
   function selectionContainer(target) { return (target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement)?.closest('[data-selectable]'); }
   function positionPopover(rect) {
     popover.hidden = false; const box = popover.getBoundingClientRect();
-    const left = Math.max(10, Math.min(innerWidth - box.width - 10, rect.left + rect.width / 2 - box.width / 2));
+    const left = Math.max(8, Math.min(innerWidth - box.width - 8, rect.left));
     const above = rect.top - box.height - 10;
     const top = above >= 10 ? above : Math.min(innerHeight - box.height - 10, rect.bottom + 10);
     popover.style.left = `${left}px`; popover.style.top = `${Math.max(10, Math.min(innerHeight - box.height - 10, top))}px`;
   }
-  function updatePopover(rect) {
-    const existing = state().marks.find(mark => mark.id === activeSelection?.markId);
+  function reflectColor() {
     document.querySelectorAll('button[data-highlight]').forEach(item => {
-      const color = item.dataset.highlight;
-      const selected = color === existing?.color;
-      item.setAttribute('aria-pressed', String(selected));
-      item.title = selected ? `取消${colors[color][1]}高亮` : `使用${colors[color][1]}高亮`;
-      item.setAttribute('aria-label', item.title);
+      item.setAttribute('aria-pressed', String(item.dataset.highlight === selectedColor));
     });
-    $('#selection-highlight').textContent = existing?.color ? '取消高亮' : '高亮';
-    $('#selection-annotate').textContent = existing?.note ? '编辑批注' : '批注';
+  }
+  function updatePopover(rect) {
+    reflectColor();
+    $('#selection-remove-highlight').hidden = activeSelection?.origin !== 'mark';
     positionPopover(rect);
   }
   function captureSelection() {
@@ -236,20 +243,34 @@
     const prefix = range.cloneRange(); prefix.selectNodeContents(container); prefix.setEnd(range.startContainer, range.startOffset);
     const raw = range.toString(), trimmed = raw.trim(); if (!trimmed) { hidePopover(); return; }
     const start = prefix.toString().length + raw.indexOf(trimmed), end = start + trimmed.length, scope = container.dataset.selectable;
-    const existing = state().marks.findLast(mark => mark.scope === scope && mark.start === start && mark.end === end && mark.text === trimmed);
-    activeSelection = { sampleId: currentId, scope, start, end, text: trimmed, markId: existing?.id, origin: 'native' }; updatePopover(rect);
+    activeSelection = { sampleId: currentId, scope, start, end, text: trimmed, origin: 'native' }; updatePopover(rect);
   }
   function queueSelectionCapture() { cancelAnimationFrame(selectionFrame); selectionFrame = requestAnimationFrame(captureSelection); }
   document.addEventListener('selectionchange', queueSelectionCapture);
+  let pointerMark = null;
+  function restoreMarkTabStop() {
+    if (pointerMark) pointerMark.tabIndex = 0;
+    pointerMark = null;
+  }
   document.addEventListener('pointerdown', event => {
+    restoreMarkTabStop();
     if (popover.contains(event.target)) { event.preventDefault(); return; }
     hidePopover(); activeSelection = null;
     const selectable = event.target.closest('[data-selectable]');
     dragging = Boolean(selectable);
-    if (selectable) selectable.focus({ preventScroll: true });
+    if (selectable) {
+      // A focusable inline mark otherwise captures the drag before a native range can start.
+      pointerMark = event.target.closest('[data-mark-id][tabindex="0"]');
+      pointerMark?.removeAttribute('tabindex');
+      selectable.focus({ preventScroll: true });
+    }
   });
-  document.addEventListener('pointerup', () => { const wasSelecting = dragging; dragging = false; if (wasSelecting) queueSelectionCapture(); });
-  document.addEventListener('pointercancel', () => { dragging = false; hidePopover(); });
+  document.addEventListener('pointerup', () => {
+    restoreMarkTabStop();
+    if (dragging) { dragging = false; queueSelectionCapture(); }
+  });
+  document.addEventListener('pointercancel', () => { restoreMarkTabStop(); dragging = false; hidePopover(); });
+  window.addEventListener('blur', restoreMarkTabStop);
   window.addEventListener('scroll', dismissPopover, { passive: true, capture: true });
   window.addEventListener('resize', dismissPopover, { passive: true });
   document.addEventListener('keydown', event => {
@@ -257,8 +278,29 @@
     if (popover.contains(document.activeElement)) (activeSelection?.scope === 'translation' ? translated : original).focus({ preventScroll: true });
     dismissPopover(); getSelection()?.removeAllRanges();
   });
+  function openSavedMark(target, keyboard) {
+    const mark = state().marks.find(item => item.id === target.dataset.markId);
+    if (!mark) return;
+    if (mark.note) {
+      activeSelection = null;
+      dismissPopover();
+      showTool('marks');
+      $(`[data-saved-mark="${mark.id}"]`).focus();
+      return;
+    }
+    activeSelection = { ...mark, sampleId: currentId, markId: mark.id, origin: 'mark' };
+    selectedColor = mark.color;
+    updatePopover(target.getBoundingClientRect());
+    if (keyboard) $('#selection-annotate').focus({ preventScroll: true });
+  }
   [original, translated].forEach(element => {
     element.addEventListener('keydown', event => {
+      const markedText = event.target.closest('[data-mark-id]');
+      if (markedText && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        openSavedMark(markedText, true);
+        return;
+      }
       if (event.key === 'Tab' && !event.shiftKey && !popover.hidden) { event.preventDefault(); $('#selection-annotate').focus(); return; }
       if (!event.shiftKey && event.key.startsWith('Arrow')) hidePopover();
       if (!event.shiftKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
@@ -275,10 +317,7 @@
     element.addEventListener('click', event => {
       if (!getSelection()?.isCollapsed || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target.closest('[data-mark-id]'); if (!target) return;
-      const mark = state().marks.find(item => item.id === target.dataset.markId);
-      activeSelection = { ...mark, sampleId: currentId, markId: mark.id, origin: 'mark' };
-      if (mark.note) updatePopover(target.getBoundingClientRect());
-      else toggleHighlight(activeSelection);
+      openSavedMark(target, false);
     });
   });
   $('#select-example').addEventListener('click', () => {
@@ -293,43 +332,61 @@
     if (!mark) { mark = { id: `mark-${nextMarkId++}`, scope: selection.scope, start: selection.start, end: selection.end, text: selection.text, color, note: '' }; entry.marks.push(mark); }
     mark.color = color; if (note !== undefined) { mark.note = note; mark.createdAt ||= new Date().toISOString(); } return mark;
   }
-  function toggleHighlight(selection, requestedColor) {
-    if (!selection) return;
+  function finishHighlight(selection) {
     const source = selection.scope === 'translation' ? translated : original;
     const returnFocus = popover.contains(document.activeElement);
-    const entry = states.get(selection.sampleId);
-    const mark = entry.marks.find(item => item.id === selection.markId);
-    if (mark?.color && (!requestedColor || requestedColor === mark.color)) {
-      if (mark.note) {
-        mark.color = null;
-        say('已取消这条批注的高亮，点击下划线仍可打开批注。');
-      } else {
-        entry.marks = entry.marks.filter(item => item !== mark);
-        if (pendingAnnotation?.markId === mark.id) {
-          delete pendingAnnotation.markId;
-          pendingAnnotation.color = null;
-        }
-        say('已取消这段文字的高亮。');
-      }
-      if (locatedSelection?.id === mark.id) locatedSelection = null;
-    } else {
-      const color = requestedColor || lastColor;
-      upsertMark(selection, color); lastColor = color;
-      say(mark?.note ? `批注已使用${colors[color][1]}高亮。` : `已标为${colors[color][1]}。点击高亮文字可取消，重新选中可改色。`);
-    }
     activeSelection = null; dismissPopover(); getSelection()?.removeAllRanges(); renderReader(); renderShelves();
     if (returnFocus) source.focus({ preventScroll: true });
   }
-  document.querySelectorAll('button[data-highlight]').forEach(item => item.addEventListener('click', () => toggleHighlight(activeSelection, item.dataset.highlight)));
-  $('#selection-highlight').addEventListener('click', () => toggleHighlight(activeSelection));
+  document.querySelectorAll('button[data-highlight]').forEach(item => item.addEventListener('click', () => {
+    if (!activeSelection) return;
+    selectedColor = item.dataset.highlight;
+    try { localStorage.setItem('parallel-site-highlight-color', selectedColor); } catch {}
+    reflectColor();
+    if (activeSelection.origin === 'mark') {
+      const mark = state().marks.find(entry => entry.id === activeSelection.markId);
+      if (mark && mark.color !== selectedColor) {
+        mark.color = selectedColor;
+        renderReader(); renderShelves();
+      }
+    }
+  }));
+  $('#selection-highlight').addEventListener('click', () => {
+    if (!activeSelection) return;
+    const selection = activeSelection;
+    const marks = state().marks;
+    const existing = marks.find(item => !item.note && item.scope === selection.scope
+      && item.start === selection.start && item.end === selection.end && item.text === selection.text);
+    const mark = upsertMark({ ...selection, markId: existing?.id }, selectedColor);
+    // Applying a highlight brings it above other intersecting highlights.
+    if (existing) {
+      marks.splice(marks.indexOf(mark), 1);
+      marks.push(mark);
+    }
+    finishHighlight(selection);
+    say('已高亮。点击高亮文字可换色或取消高亮。');
+  });
+  function removeHighlight(selection) {
+    const entry = states.get(selection.sampleId);
+    const mark = entry.marks.find(item => item.id === selection.markId && !item.note);
+    if (!mark) return;
+    entry.marks = entry.marks.filter(item => item !== mark);
+    if (locatedSelection?.id === mark.id) locatedSelection = null;
+    finishHighlight(selection);
+    say('已取消高亮。');
+  }
+  $('#selection-remove-highlight').addEventListener('click', () => {
+    if (activeSelection?.origin === 'mark') removeHighlight(activeSelection);
+  });
   function editAnnotation(selection) {
     const input = $('#sample-annotation-input');
     if (pendingAnnotation && input.value.trim()) {
       say('已回到正在编辑的批注。保存或取消后可以开始下一条。');
     } else {
-      pendingAnnotation = { ...selection };
-      const mark = states.get(selection.sampleId).marks.find(item => item.id === selection.markId);
-      input.value = mark?.note || '';
+      // An annotation and an independent highlight can share the same quote.
+      const annotation = states.get(selection.sampleId).marks.find(item => item.id === selection.markId && item.note);
+      pendingAnnotation = { ...selection, markId: annotation?.id };
+      input.value = annotation?.note || '';
       say('');
     }
     const { sampleId, scope, text } = pendingAnnotation;
@@ -364,7 +421,7 @@
   $('#annotation-form').addEventListener('submit', event => {
     event.preventDefault(); const text = $('#sample-annotation-input').value.trim(); if (!text || !pendingAnnotation) return;
     const old = states.get(pendingAnnotation.sampleId).marks.find(item => item.id === pendingAnnotation.markId);
-    const color = old ? old.color : pendingAnnotation.color === null ? null : lastColor;
+    const color = old?.color || 'yellow';
     const mark = upsertMark(pendingAnnotation, color, text);
     closeAnnotation(); showTool('marks');
     $(`[data-saved-mark="${mark.id}"] .shelf-location`).focus(); say('批注已保存，点页码可回到选中的文字。');
@@ -380,7 +437,7 @@
     if (pendingAnnotation?.markId === markId) { annotationEditor.hidden = true; pendingAnnotation = null; }
     locatedSelection = null; hidePopover(); renderReader(); renderShelves();
     if (!$('#panel-marks').hidden) $('#tool-marks').focus();
-    say('已删除这条标记与批注。');
+    say('已删除这条批注。');
   }
   function renderShelves() {
     const markItems = samples.flatMap(sample => states.get(sample.id).marks.map(mark => ({ sample, mark })));
@@ -395,9 +452,10 @@
       const selection = { ...mark, sampleId: sample.id, markId: mark.id };
       actions.append(button(mark.note ? '编辑批注' : '写批注', () => editAnnotation(selection)));
       if (mark.note) actions.append(button('删除', () => removeMark(sample.id, mark.id)));
-      else actions.append(button('取消高亮', () => { toggleHighlight(selection); $('#tool-marks').focus(); }));
+      else actions.append(button('取消高亮', () => { removeHighlight(selection); $('#tool-marks').focus(); }));
       if (mark.note) {
         item.classList.add('sample-comment');
+        item.tabIndex = -1;
         const header = node('header', undefined, 'sample-comment-header'), avatar = node('span', undefined, 'sample-comment-avatar');
         avatar.setAttribute('aria-hidden', 'true'); avatar.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg>';
         header.append(avatar, node('strong', '我'), node('small', new Date(mark.createdAt).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'})));

@@ -12,11 +12,11 @@
   <link rel="icon" href="assets/parallel.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=reader-ux-2">
   <link rel="stylesheet" href="motion.css?v=reader-ux-2">
-  <link rel="stylesheet" href="features.css?v=reader-ux-2">
+  <link rel="stylesheet" href="features.css?v=reader-ux-3">
   <script src="theme.js?v=reader-ux-2"></script>
   <script src="site.js?v=reader-ux-2" defer></script>
   <script src="motion.js?v=reader-ux-2" defer></script>
-  <script src="features.js?v=reader-ux-2" defer></script>
+  <script src="features.js?v=reader-ux-3" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -89,7 +89,7 @@
         <div class="sample-workspace">
           <article class="sample-source" id="sample-source" tabindex="-1"><div class="sample-bar"><div class="sample-source-title"><strong lang="en">Leveling the Playing Field</strong><span id="sample-page">第 5 页</span></div><button id="annotate-sample" type="button" class="button primary" aria-controls="annotation-editor" disabled>给这段写批注</button></div>
             <noscript><p class="selection-hint">你可以直接阅读下面的中英选段。开启 JavaScript 后即可写批注、搜索或体验问答。</p></noscript>
-            <p class="selection-hint" id="selection-hint">选中文字可以高亮或写批注。单击独立高亮可取消，重新选中可换色。<kbd>Shift + 方向键选字，Tab 进入工具</kbd></p>
+            <p class="selection-hint" id="selection-hint">选中文字，选颜色后点「高亮」。点击已高亮的文字，可换色或点「取消高亮」。<kbd>Shift + 方向键选字，Tab 进入工具</kbd></p>
             <div id="original-pane" class="reading-pane"><span class="pane-label">原文</span><blockquote id="sample-quote" data-selectable="original" tabindex="0" lang="en" aria-label="可选择的原文">Holding equal the optimization objective, data access, and future reference access is imperative to properly evaluate differences in controller synthesis approaches.</blockquote></div>
             <div id="translation-pane" class="reading-pane"><div class="translation-heading"><span class="pane-label">中文速译</span><button id="edit-translation" type="button" class="sample-text-button" aria-expanded="false" aria-controls="translation-editor">编辑译文 ✎</button></div><p id="sample-translation" data-selectable="translation" tabindex="0" aria-label="可选择的中文译文">比较控制器之前，要先对齐优化目标、数据访问和未来参考信息。</p><form id="translation-editor" hidden><label class="visually-hidden" for="translation-input">修改这段译文</label><textarea id="translation-input" rows="3" maxlength="1500" required></textarea><div class="editor-actions"><button type="submit" class="sample-citation">保存修改</button><button id="cancel-translation" type="button" class="sample-text-button">取消</button><button id="restore-translation" type="button" class="sample-text-button">恢复示例</button></div></form></div>
             <div class="sample-source-actions"><button id="explain-sample" type="button" class="sample-citation">解释这一段</button><button id="select-example" type="button" class="sample-text-button">选中整段</button></div><p class="sample-source-credit">真实论文选段 · 中文为教学归纳 · CC BY 4.0</p>
@@ -140,7 +140,22 @@
     </div></section>
   </main>
   <footer class="site-footer container"><div class="footer-top"><a class="brand" href="#"><img src="assets/parallel.svg" width="32" height="32" alt=""><span>页间 <b>Parallel</b></span></a><p>让理解，在页间相遇。</p><a href="https://github.com/XIA-J-B/ParallelTranslation" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div><details id="attribution" class="attribution"><summary>演示素材与署名</summary><p>软件截图与交互选段使用离线教学论文 <a href="https://arxiv.org/abs/2506.17832v1" target="_blank" rel="noopener noreferrer"><cite>Leveling the Playing Field: Carefully Comparing Classical and Learned Controllers for Quadrotor Trajectory Tracking</cite></a>（2025），作者 Pratik Kunapuli、Jake Welde、Dinesh Jayaraman、Vijay Kumar，依 <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> 展示。中文译文与预置回答为 ParallelTranslation 项目的教学改编。首屏摘录取自该论文第 5 页，批注为教学示例。</p><p>标题字体使用 Noto Serif SC，依 SIL Open Font License 1.1 分发；<a href="assets/OFL.txt">查看字体许可</a>。</p></details><div class="footer-bottom"><span>ParallelTranslation · 为认真阅读而做</span><button class="motion-control" id="motion-toggle" type="button" aria-label="暂停网页动效" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path class="motion-pause" d="M5.5 4v8M10.5 4v8"/><path class="motion-play" d="m5 3 7 5-7 5Z"/></svg><span>暂停动效</span></button></div></footer>
-  <div id="selection-popover" class="selection-popover" role="toolbar" aria-label="选中文字操作" hidden><div class="selection-actions"><button id="selection-annotate" type="button">批注</button><button id="selection-explain" type="button">解释</button><button id="selection-cite" type="button">引用</button><button id="selection-highlight" type="button">高亮</button></div><div class="selection-colors" role="group" aria-label="高亮颜色"><button type="button" data-highlight="yellow" style="--swatch:#f3d34a" aria-label="黄色高亮" aria-pressed="false"></button><button type="button" data-highlight="green" style="--swatch:#76cc9b" aria-label="绿色高亮" aria-pressed="false"></button><button type="button" data-highlight="blue" style="--swatch:#85b6f1" aria-label="蓝色高亮" aria-pressed="false"></button><button type="button" data-highlight="pink" style="--swatch:#ed9bbb" aria-label="粉色高亮" aria-pressed="false"></button><button type="button" data-highlight="purple" style="--swatch:#b39aea" aria-label="紫色高亮" aria-pressed="false"></button></div></div>
+  <div id="selection-popover" class="selection-popover" role="toolbar" aria-label="选中文字操作" hidden>
+    <div class="selection-actions">
+      <button id="selection-annotate" type="button">批注</button>
+      <button id="selection-explain" type="button">解释</button>
+      <button id="selection-cite" type="button">引用</button>
+      <button id="selection-highlight" type="button">高亮</button>
+      <button id="selection-remove-highlight" type="button" hidden>取消高亮</button>
+    </div>
+    <div class="selection-colors" role="group" aria-label="高亮颜色">
+      <button type="button" data-highlight="yellow" style="--swatch:#f2cf4c" aria-label="黄色高亮" aria-pressed="true"></button>
+      <button type="button" data-highlight="green" style="--swatch:#70cf96" aria-label="绿色高亮" aria-pressed="false"></button>
+      <button type="button" data-highlight="blue" style="--swatch:#7fb5f5" aria-label="蓝色高亮" aria-pressed="false"></button>
+      <button type="button" data-highlight="pink" style="--swatch:#f397b8" aria-label="粉色高亮" aria-pressed="false"></button>
+      <button type="button" data-highlight="purple" style="--swatch:#b39aef" aria-label="紫色高亮" aria-pressed="false"></button>
+    </div>
+  </div>
   <dialog id="preview-dialog" aria-labelledby="preview-heading">
     <div class="dialog-bar">
       <strong id="preview-heading">双语对照 · 浅色</strong>
