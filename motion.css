@@ -18,14 +18,96 @@
   animation: none !important;
   transition: none !important;
 }
-@keyframes plate-enter {
-  from { opacity: .65; translate: 0 6px; }
+.hero-line { display: inline-block; max-width: 100%; }
+@keyframes text-arrive {
+  from { opacity: .38; translate: 0 var(--travel); }
   to { opacity: 1; translate: 0 0; }
 }
+@keyframes card-arrive {
+  from { opacity: .58; translate: 0 var(--travel); scale: .985; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+@keyframes panel-brighten {
+  from { opacity: .62; }
+  to { opacity: 1; }
+}
+@keyframes underline-draw {
+  from { scale: 0 1; }
+  to { scale: 1 1; }
+}
 @media (prefers-reduced-motion: no-preference) {
-  :root[data-motion=on] .plate-note { animation: plate-enter .35s ease-out both; }
+  [data-motion-enter] {
+    --travel: clamp(18px, 2.8vh, 38px);
+    --arrival: cubic-bezier(.2, .72, .25, 1);
+  }
+  [data-motion-enter=up] { --travel: clamp(-38px, -2.8vh, -18px); }
+
+  .hero-copy[data-motion-enter] .hero-line {
+    animation: text-arrive 740ms var(--arrival) backwards;
+  }
+  .hero-copy[data-motion-enter] .hero-line:last-child { animation-delay: 100ms; }
+  .hero-copy[data-motion-enter] .title-accent::after {
+    transform-origin: left center;
+    animation: underline-draw 520ms var(--arrival) 270ms backwards;
+  }
+  .hero-copy[data-motion-enter] .hero-description {
+    animation: text-arrive 610ms var(--arrival) 150ms backwards;
+  }
+  .hero-copy[data-motion-enter] :is(.hero-actions, .hero-meta) {
+    animation: panel-brighten 580ms ease-out 200ms backwards;
+  }
+  :is(.section-heading, .reading-note, .download-intro, .showcase-summary, #faq > div)[data-motion-enter] :is(h2, h3) {
+    animation: text-arrive 680ms var(--arrival) backwards;
+  }
+  :is(.section-heading, .reading-note, .download-intro, .showcase-summary, #faq > div)[data-motion-enter] p {
+    animation: text-arrive 560ms var(--arrival) 85ms backwards;
+  }
+  :is(.capability-card, .steps li)[data-motion-enter] {
+    animation: card-arrive 650ms var(--arrival) var(--stagger, 0ms) backwards;
+  }
+  .steps li[data-motion-enter]:focus-within { animation-duration: 0s; animation-delay: 0s; }
+  :is(.workbench, .reading-lab, .download-card, .faq-list details, .footer-top)[data-motion-enter] {
+    animation: panel-brighten 560ms ease-out var(--stagger, 0ms) backwards;
+  }
+  :is(.capability-card, .steps li, .faq-list details):nth-child(3n + 2) { --stagger: 55ms; }
+  :is(.capability-card, .steps li, .faq-list details):nth-child(3n) { --stagger: 110ms; }
+  @media (min-width: 1680px) {
+    .capability-card:nth-child(4) { --stagger: 150ms; }
+    .capability-card:nth-child(5) { --stagger: 195ms; }
+    .capability-card:nth-child(6) { --stagger: 240ms; }
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Read the marked phrase first, then settle its note into the page margin. */
+@keyframes plate-highlight-stroke {
+  from { background-size: 0% 100%; }
+  to { background-size: 100% 100%; }
+}
+@keyframes plate-note-settle {
+  from {
+    opacity: .82;
+    transform: translate(3px, var(--note-travel, 7px)) rotate(var(--note-tilt, .8deg));
+    box-shadow: 0 9px 17px #20273321;
+  }
+  to { opacity: 1; transform: none; box-shadow: 0 5px 12px #20273312; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion=on] .reader-plate[data-motion-enter] .plate-sheet mark {
+    -webkit-box-decoration-break: slice;
+    box-decoration-break: slice;
+    background: linear-gradient(var(--highlight), var(--highlight)) left center / 100% 100% no-repeat;
+    animation: plate-highlight-stroke 680ms cubic-bezier(.28, .06, .36, 1) both;
+  }
+  :root[data-motion=on] .reader-plate[data-motion-enter=up] {
+    --note-travel: -3px;
+    --note-tilt: -.7deg;
+  }
+  :root[data-motion=on] .reader-plate[data-motion-enter] .plate-note {
+    transform-origin: 88% 35%;
+    animation: plate-note-settle 440ms cubic-bezier(.18, .76, .32, 1) 470ms backwards;
+  }
 }
