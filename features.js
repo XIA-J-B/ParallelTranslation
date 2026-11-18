@@ -271,8 +271,26 @@
   });
   document.addEventListener('pointercancel', () => { restoreMarkTabStop(); dragging = false; hidePopover(); });
   window.addEventListener('blur', restoreMarkTabStop);
-  window.addEventListener('scroll', dismissPopover, { passive: true, capture: true });
-  window.addEventListener('resize', dismissPopover, { passive: true });
+  function repositionPopover() {
+    if (popover.hidden || !activeSelection) return;
+    if (activeSelection.origin !== 'mark') {
+      queueSelectionCapture();
+      return;
+    }
+    const pane = activeSelection.scope === 'translation' ? translated : original;
+    const fragments = pane.querySelectorAll(`[data-mark-id="${activeSelection.markId}"]`);
+    for (const fragment of fragments) {
+      for (const rect of fragment.getClientRects()) {
+        if (rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth) {
+          positionPopover(rect);
+          return;
+        }
+      }
+    }
+    dismissPopover();
+  }
+  window.addEventListener('scroll', repositionPopover, { passive: true, capture: true });
+  window.addEventListener('resize', repositionPopover, { passive: true });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || popover.hidden) return;
     if (popover.contains(document.activeElement)) (activeSelection?.scope === 'translation' ? translated : original).focus({ preventScroll: true });
