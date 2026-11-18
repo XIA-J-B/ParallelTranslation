@@ -32,6 +32,7 @@
   const original = $('#sample-quote'), translated = $('#sample-translation');
   let currentId = 'fairness', view = 'parallel', lastColor = 'yellow';
   let activeSelection = null, pendingAnnotation = null, dragging = false, selectionFrame = 0, nextMarkId = 1;
+  let locatedSelection = null;
   let matches = [], matchIndex = -1;
   const current = () => samples.find(sample => sample.id === currentId);
   const state = () => states.get(currentId);
@@ -85,17 +86,32 @@
     const text = textFor(currentId, scope);
     const marks = state().marks.filter(mark => mark.scope === scope && text.slice(mark.start, mark.end) === mark.text);
     const found = matches.filter(match => match.id === currentId && match.scope === scope);
+    const target = locatedSelection || pendingAnnotation;
+    const anchor = target?.sampleId === currentId && target.scope === scope && text.slice(target.start, target.end) === target.text ? target : null;
     const boundaries = new Set([0, text.length]);
     [...marks, ...found].forEach(item => { boundaries.add(item.start); boundaries.add(item.end); });
+    if (anchor) { boundaries.add(anchor.start); boundaries.add(anchor.end); }
     const positions = [...boundaries].sort((a, b) => a - b), fragment = document.createDocumentFragment();
     for (let index = 0; index < positions.length - 1; index++) {
       const start = positions[index], end = positions[index + 1];
-      const mark = marks.findLast(item => start >= item.start && end <= item.end);
+      const covers = item => start >= item.start && end <= item.end;
+      const mark = marks.findLast(covers);
+      const paint = mark && (mark.color ? mark : marks.findLast(item => item.color && covers(item)));
       const match = found.find(item => start >= item.start && end <= item.end);
-      if (!mark && !match) { fragment.append(document.createTextNode(text.slice(start, end))); continue; }
-      const span = node(mark ? 'mark' : 'span', text.slice(start, end));
-      if (mark) { span.dataset.markId = mark.id; span.style.setProperty('--sample-highlight', colors[mark.color][0]); span.className = 'reader-mark'; }
+      const anchored = anchor && start >= anchor.start && end <= anchor.end;
+      if (!mark && !match && !anchored) { fragment.append(document.createTextNode(text.slice(start, end))); continue; }
+      const span = node(paint ? 'mark' : 'span', text.slice(start, end));
+      if (mark) {
+        span.dataset.markId = mark.id;
+        span.title = mark.note ? '查看批注操作' : '点击取消高亮，重新选中这段可改色';
+        if (paint) {
+          span.style.setProperty('--sample-highlight', colors[paint.color][0]);
+          span.classList.add('reader-mark');
+        }
+        if (mark.note) span.classList.add('annotated-text');
+      }
       if (match) { span.classList.add('search-hit'); if (matches[matchIndex] === match) span.classList.add('current-hit'); }
+      if (anchored) span.classList.add('annotation-anchor');
       fragment.append(span);
     }
     element.replaceChildren(fragment);
@@ -123,7 +139,7 @@
     $('#save-sample').textContent = notes.has(`${currentId}:${entry.question}`) ? '★ 已收藏 · 查看笔记' : '☆ 收藏这条理解';
   }
   function selectSample(id) {
-    hidePopover(); activeSelection = null; currentId = id;
+    hidePopover(); activeSelection = null; locatedSelection = null; currentId = id;
     $('#sample-source').classList.remove('is-located');
     document.querySelectorAll('[data-sample]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.sample === id)));
     renderReader(); renderAnswer();
@@ -131,19 +147,22 @@
   document.querySelectorAll('[data-sample]').forEach(item => item.addEventListener('click', () => selectSample(item.dataset.sample)));
   function ask(index) {
     state().question = index; showTool('ask'); renderAnswer(); animate($('#sample-answer'));
+    $('#sample-answer-title').tabIndex = -1;
+    $('#sample-answer-title').focus();
     say('已展示这段的预置教学解释，可以查出处或收藏。');
   }
   $('#explain-sample').addEventListener('click', () => ask(0));
   $('#clear-reference').addEventListener('click', () => { state().reference = null; renderAnswer(); });
-  function locate(id, scope = 'original', markId = null) {
+  function locate(id, scope = 'original', mark = null) {
     selectSample(id);
     if ((scope === 'original' && view === 'translation') || (scope === 'translation' && view === 'original')) setView('parallel');
     if (scope === 'translation' && state().editing) { state().editing = false; renderReader(); }
     const element = scope === 'original' ? original : translated;
-    const mark = state().marks.find(item => item.id === markId);
-    if (mark && textFor(id, scope).slice(mark.start, mark.end) !== mark.text) { say('译文已修改，原选区仍保留在批注中。'); return; }
+    if (mark && textFor(id, scope).slice(mark.start, mark.end) !== mark.text) { say('译文已修改，无法准确定位。原选文字为「' + mark.text + '」。'); return; }
+    locatedSelection = mark && { ...mark, sampleId: id };
+    renderText(element, scope);
     $('#sample-source').classList.add('is-located'); element.focus({ preventScroll: true });
-    element.scrollIntoView({ behavior: motionAllowed() ? 'smooth' : 'instant', block: 'center' });
+    (element.querySelector('.annotation-anchor') || element).scrollIntoView({ behavior: motionAllowed() ? 'smooth' : 'instant', block: 'center' });
     say(`已回到第 ${current().page} 页${scope === 'original' ? '原文' : '译文'}${mark ? '的标记' : ''}。`);
   }
   $('#sample-citation').addEventListener('click', () => locate(currentId));
@@ -177,7 +196,7 @@
       if (start !== -1 && text.indexOf(mark.text, start + 1) === -1) { mark.start = start; mark.end = start + mark.text.length; }
     });
     const selectedId = currentId; findMatches(); selectSample(selectedId); renderShelves();
-    $('#edit-translation').focus(); say('译文已更新；你的批注仍保留在右侧。');
+    $('#edit-translation').focus(); say('译文已更新，原有批注仍保留在批注栏。');
   }
   $('#translation-editor').addEventListener('submit', event => { event.preventDefault(); const text = state().draft.trim(); if (text) saveTranslation(text); });
   $('#cancel-translation').addEventListener('click', () => { state().editing = false; state().draft = state().translation; renderReader(); $('#edit-translation').focus(); });
@@ -192,8 +211,16 @@
   }
   function updatePopover(rect) {
     const existing = state().marks.find(mark => mark.id === activeSelection?.markId);
-    document.querySelectorAll('button[data-highlight]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.highlight === (existing?.color || lastColor))));
-    $('#remove-selection-mark').hidden = !existing; positionPopover(rect);
+    document.querySelectorAll('button[data-highlight]').forEach(item => {
+      const color = item.dataset.highlight;
+      const selected = color === existing?.color;
+      item.setAttribute('aria-pressed', String(selected));
+      item.title = selected ? `取消${colors[color][1]}高亮` : `使用${colors[color][1]}高亮`;
+      item.setAttribute('aria-label', item.title);
+    });
+    $('#selection-highlight').textContent = existing?.color ? '取消高亮' : '高亮';
+    $('#selection-annotate').textContent = existing?.note ? '编辑批注' : '批注';
+    positionPopover(rect);
   }
   function captureSelection() {
     if (dragging) return;
@@ -209,7 +236,7 @@
     const prefix = range.cloneRange(); prefix.selectNodeContents(container); prefix.setEnd(range.startContainer, range.startOffset);
     const raw = range.toString(), trimmed = raw.trim(); if (!trimmed) { hidePopover(); return; }
     const start = prefix.toString().length + raw.indexOf(trimmed), end = start + trimmed.length, scope = container.dataset.selectable;
-    const existing = state().marks.find(mark => mark.scope === scope && mark.start === start && mark.end === end && mark.text === trimmed);
+    const existing = state().marks.findLast(mark => mark.scope === scope && mark.start === start && mark.end === end && mark.text === trimmed);
     activeSelection = { sampleId: currentId, scope, start, end, text: trimmed, markId: existing?.id, origin: 'native' }; updatePopover(rect);
   }
   function queueSelectionCapture() { cancelAnimationFrame(selectionFrame); selectionFrame = requestAnimationFrame(captureSelection); }
@@ -225,7 +252,11 @@
   document.addEventListener('pointercancel', () => { dragging = false; hidePopover(); });
   window.addEventListener('scroll', dismissPopover, { passive: true, capture: true });
   window.addEventListener('resize', dismissPopover, { passive: true });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { hidePopover(); getSelection()?.removeAllRanges(); } });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || popover.hidden) return;
+    if (popover.contains(document.activeElement)) (activeSelection?.scope === 'translation' ? translated : original).focus({ preventScroll: true });
+    dismissPopover(); getSelection()?.removeAllRanges();
+  });
   [original, translated].forEach(element => {
     element.addEventListener('keydown', event => {
       if (event.key === 'Tab' && !event.shiftKey && !popover.hidden) { event.preventDefault(); $('#selection-annotate').focus(); return; }
@@ -242,10 +273,12 @@
       }
     });
     element.addEventListener('click', event => {
-      if (!getSelection()?.isCollapsed) return;
+      if (!getSelection()?.isCollapsed || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target.closest('[data-mark-id]'); if (!target) return;
       const mark = state().marks.find(item => item.id === target.dataset.markId);
-      activeSelection = { ...mark, sampleId: currentId, markId: mark.id, origin: 'mark' }; updatePopover(target.getBoundingClientRect());
+      activeSelection = { ...mark, sampleId: currentId, markId: mark.id, origin: 'mark' };
+      if (mark.note) updatePopover(target.getBoundingClientRect());
+      else toggleHighlight(activeSelection);
     });
   });
   $('#select-example').addEventListener('click', () => {
@@ -260,54 +293,109 @@
     if (!mark) { mark = { id: `mark-${nextMarkId++}`, scope: selection.scope, start: selection.start, end: selection.end, text: selection.text, color, note: '' }; entry.marks.push(mark); }
     mark.color = color; if (note !== undefined) { mark.note = note; mark.createdAt ||= new Date().toISOString(); } return mark;
   }
-  function applyHighlight(color) {
-    if (!activeSelection) return;
-    upsertMark(activeSelection, color); lastColor = color;
-    hidePopover(); getSelection()?.removeAllRanges(); renderReader(); renderShelves();
-    say(`已将实际选中的文字标为${colors[color][1]}。点击标记可改色或添加批注。`);
-  }
-  document.querySelectorAll('button[data-highlight]').forEach(item => item.addEventListener('click', () => applyHighlight(item.dataset.highlight)));
-  $('#selection-highlight').addEventListener('click', () => applyHighlight(lastColor));
-  function editAnnotation(selection) {
-    if (pendingAnnotation && $('#sample-annotation-input').value.trim()) {
-      showTool('marks'); $('#sample-annotation-input').focus(); say('请先保存或取消正在编辑的批注。'); return;
+  function toggleHighlight(selection, requestedColor) {
+    if (!selection) return;
+    const source = selection.scope === 'translation' ? translated : original;
+    const returnFocus = popover.contains(document.activeElement);
+    const entry = states.get(selection.sampleId);
+    const mark = entry.marks.find(item => item.id === selection.markId);
+    if (mark?.color && (!requestedColor || requestedColor === mark.color)) {
+      if (mark.note) {
+        mark.color = null;
+        say('已取消这条批注的高亮，点击下划线仍可打开批注。');
+      } else {
+        entry.marks = entry.marks.filter(item => item !== mark);
+        if (pendingAnnotation?.markId === mark.id) {
+          delete pendingAnnotation.markId;
+          pendingAnnotation.color = null;
+        }
+        say('已取消这段文字的高亮。');
+      }
+      if (locatedSelection?.id === mark.id) locatedSelection = null;
+    } else {
+      const color = requestedColor || lastColor;
+      upsertMark(selection, color); lastColor = color;
+      say(mark?.note ? `批注已使用${colors[color][1]}高亮。` : `已标为${colors[color][1]}。点击高亮文字可取消，重新选中可改色。`);
     }
-    pendingAnnotation = { ...selection }; const mark = states.get(selection.sampleId).marks.find(item => item.id === selection.markId);
-    $('#sample-annotation-input').value = mark?.note || '';
-    hidePopover(); getSelection()?.removeAllRanges(); annotationEditor.hidden = false; showTool('marks');
-    $('#marks-empty').hidden = true; $('#sample-annotation-input').focus({ preventScroll: innerWidth > 800 });
+    activeSelection = null; dismissPopover(); getSelection()?.removeAllRanges(); renderReader(); renderShelves();
+    if (returnFocus) source.focus({ preventScroll: true });
   }
-  function closeAnnotation() { annotationEditor.hidden = true; pendingAnnotation = null; getSelection()?.removeAllRanges(); renderShelves(); }
+  document.querySelectorAll('button[data-highlight]').forEach(item => item.addEventListener('click', () => toggleHighlight(activeSelection, item.dataset.highlight)));
+  $('#selection-highlight').addEventListener('click', () => toggleHighlight(activeSelection));
+  function editAnnotation(selection) {
+    const input = $('#sample-annotation-input');
+    if (pendingAnnotation && input.value.trim()) {
+      say('已回到正在编辑的批注。保存或取消后可以开始下一条。');
+    } else {
+      pendingAnnotation = { ...selection };
+      const mark = states.get(selection.sampleId).marks.find(item => item.id === selection.markId);
+      input.value = mark?.note || '';
+      say('');
+    }
+    const { sampleId, scope, text } = pendingAnnotation;
+    selectSample(sampleId);
+    if ((scope === 'original' && view === 'translation') || (scope === 'translation' && view === 'original')) setView('parallel');
+    if (scope === 'translation') state().editing = false;
+    const source = scope === 'original' ? '原文' : '译文';
+    $('#annotation-return').textContent = `第 ${current().page} 页 · ${source} ↗`;
+    $('#annotation-context').textContent = text;
+    dismissPopover(); getSelection()?.removeAllRanges(); annotationEditor.hidden = false; showTool('marks');
+    renderReader(); $('#marks-empty').hidden = true; input.focus();
+  }
+  function annotateParagraph() {
+    const scope = view === 'translation' ? 'translation' : 'original';
+    const text = textFor(currentId, scope);
+    editAnnotation({ sampleId: currentId, scope, text, start: 0, end: text.length });
+  }
+  $('#annotate-sample').addEventListener('click', annotateParagraph);
+  $('#annotate-sample').disabled = false;
+  $('#start-annotation').addEventListener('click', annotateParagraph);
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[data-start-annotation][href="#annotate-sample"]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+    annotateParagraph();
+  });
+  function closeAnnotation() { annotationEditor.hidden = true; pendingAnnotation = null; locatedSelection = null; getSelection()?.removeAllRanges(); renderReader(); renderShelves(); }
   $('#selection-annotate').addEventListener('click', () => { if (activeSelection) editAnnotation(activeSelection); });
-  $('#cancel-annotation').addEventListener('click', closeAnnotation);
-  $('#annotation-return').addEventListener('click', () => {if (pendingAnnotation) locate(pendingAnnotation.sampleId, pendingAnnotation.scope, pendingAnnotation.markId);});
+  $('#cancel-annotation').addEventListener('click', () => { closeAnnotation(); $('#tool-marks').focus(); });
+  $('#annotation-return').addEventListener('click', () => { if (pendingAnnotation) locate(pendingAnnotation.sampleId, pendingAnnotation.scope, pendingAnnotation); });
   $('#annotation-form').addEventListener('submit', event => {
     event.preventDefault(); const text = $('#sample-annotation-input').value.trim(); if (!text || !pendingAnnotation) return;
     const old = states.get(pendingAnnotation.sampleId).marks.find(item => item.id === pendingAnnotation.markId);
-    upsertMark(pendingAnnotation, old?.color || lastColor, text);
-    closeAnnotation(); renderReader(); renderShelves(); showTool('marks'); say('批注已保存，点页码回到原文。');
+    const color = old ? old.color : pendingAnnotation.color === null ? null : lastColor;
+    const mark = upsertMark(pendingAnnotation, color, text);
+    closeAnnotation(); showTool('marks');
+    $(`[data-saved-mark="${mark.id}"] .shelf-location`).focus(); say('批注已保存，点页码可回到选中的文字。');
   });
-  $('#selection-explain').addEventListener('click', () => { if (activeSelection) { state().reference = { ...activeSelection }; hidePopover(); ask(0); } });
+  $('#selection-explain').addEventListener('click', () => { if (activeSelection) { state().reference = { ...activeSelection }; dismissPopover(); getSelection()?.removeAllRanges(); ask(0); } });
   $('#selection-cite').addEventListener('click', () => {
     if (!activeSelection) return;
     state().reference = { ...activeSelection }; state().question = null;
-    hidePopover(); showTool('ask'); renderAnswer(); say('已带入选中文字，选一个问题接着读。');
+    dismissPopover(); getSelection()?.removeAllRanges(); showTool('ask'); renderAnswer(); $('#sample-questions button').focus(); say('已带入选中文字，选一个问题接着读。');
   });
   function removeMark(id, markId) {
     const entry = states.get(id); entry.marks = entry.marks.filter(mark => mark.id !== markId);
-    hidePopover(); renderReader(); renderShelves(); say('已删除这条标记与批注。');
+    if (pendingAnnotation?.markId === markId) { annotationEditor.hidden = true; pendingAnnotation = null; }
+    locatedSelection = null; hidePopover(); renderReader(); renderShelves();
+    if (!$('#panel-marks').hidden) $('#tool-marks').focus();
+    say('已删除这条标记与批注。');
   }
-  $('#remove-selection-mark').addEventListener('click', () => { if (activeSelection?.markId) removeMark(currentId, activeSelection.markId); });
   function renderShelves() {
     const markItems = samples.flatMap(sample => states.get(sample.id).marks.map(mark => ({ sample, mark })));
     $('#mark-count').textContent = String(markItems.length); $('#note-count').textContent = String(notes.size);
     $('#marks-empty').hidden = Boolean(markItems.length || pendingAnnotation); $('#notes-empty').hidden = Boolean(notes.size);
     $('#export-sample').disabled = !(notes.size || markItems.length || samples.some(sample => states.get(sample.id).translation !== sample.translation));
     $('#sample-mark-list').replaceChildren(...markItems.map(({ sample, mark }) => {
-      const item = node('article', undefined, 'shelf-card'); item.dataset.savedMark = mark.id; item.style.setProperty('--mark-color', colors[mark.color][0]);
-      const target = button(`${sample.label} · 第 ${sample.page} 页 · ${mark.scope === 'original' ? '原文' : '译文'} ↗`, () => locate(sample.id, mark.scope, mark.id), 'shelf-location');
+      const item = node('article', undefined, 'shelf-card'); item.dataset.savedMark = mark.id;
+      if (mark.color) item.style.setProperty('--mark-color', colors[mark.color][0]);
+      const target = button(`${sample.label} · 第 ${sample.page} 页 · ${mark.scope === 'original' ? '原文' : '译文'} ↗`, () => locate(sample.id, mark.scope, mark), 'shelf-location');
       const actions = node('div', undefined, 'shelf-actions');
-      actions.append(button(mark.note ? '编辑批注' : '写批注', () => editAnnotation({ ...mark, sampleId: sample.id, markId: mark.id })), button('删除', () => removeMark(sample.id, mark.id)));
+      const selection = { ...mark, sampleId: sample.id, markId: mark.id };
+      actions.append(button(mark.note ? '编辑批注' : '写批注', () => editAnnotation(selection)));
+      if (mark.note) actions.append(button('删除', () => removeMark(sample.id, mark.id)));
+      else actions.append(button('取消高亮', () => { toggleHighlight(selection); $('#tool-marks').focus(); }));
       if (mark.note) {
         item.classList.add('sample-comment');
         const header = node('header', undefined, 'sample-comment-header'), avatar = node('span', undefined, 'sample-comment-avatar');
@@ -333,7 +421,7 @@
   $('#export-sample').addEventListener('click', () => {
     const lines = ['# 页间 · 我的阅读体验', '', '> 预置教学内容；批注由本次体验填写。', ''];
     for (const note of notes.values()) lines.push(`## ${note.title}`, '', note.question, '', note.answer, '', `第 ${note.page} 页原文：`, '', `> ${note.quote}`, '', ...(note.selected ? ['引用选段：', '', `> ${note.selected}`, ''] : []));
-    for (const sample of samples) for (const mark of states.get(sample.id).marks) lines.push('## 高亮与批注', '', `${sample.label} · 第 ${sample.page} 页 · ${mark.scope === 'original' ? '原文' : '译文'} · ${colors[mark.color][1]}`, '', `> ${mark.text}`, '', ...(mark.note ? [mark.note, ''] : []));
+    for (const sample of samples) for (const mark of states.get(sample.id).marks) lines.push('## 高亮与批注', '', `${sample.label} · 第 ${sample.page} 页 · ${mark.scope === 'original' ? '原文' : '译文'} · ${mark.color ? colors[mark.color][1] : '无高亮'}`, '', `> ${mark.text}`, '', ...(mark.note ? [mark.note, ''] : []));
     for (const sample of samples) if (states.get(sample.id).translation !== sample.translation) lines.push(`## 我的译文 · ${sample.label}`, '', states.get(sample.id).translation, '');
     lines.push('## 素材出处', '', 'Leveling the Playing Field: Carefully Comparing Classical and Learned Controllers for Quadrotor Trajectory Tracking（2025）。', '', 'Pratik Kunapuli、Jake Welde、Dinesh Jayaraman、Vijay Kumar。', '', 'https://arxiv.org/abs/2506.17832v1', '', 'CC BY 4.0：https://creativecommons.org/licenses/by/4.0/ 。中文为教学改编，非现场模型回答；作者不为软件背书。', '');
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' }));
@@ -345,7 +433,7 @@
     hidePopover(); activeSelection = null; pendingAnnotation = null; annotationEditor.hidden = true; getSelection()?.removeAllRanges(); notes.clear(); matches = []; matchIndex = -1;
     for (const sample of samples) states.set(sample.id, freshState(sample));
     $('#sample-search').value = ''; $('#search-count').textContent = ''; $('#previous-match').disabled = $('#next-match').disabled = true;
-    setView('parallel'); selectSample('fairness'); renderShelves(); showTool('ask'); say('本次体验已重置。');
+    setView('parallel'); selectSample('fairness'); renderShelves(); showTool('marks'); say('本次体验已重置。');
   });
   renderReader(); renderAnswer(); renderShelves();
 })();

@@ -4,24 +4,35 @@ const themeButton = document.querySelector('#theme-toggle');
 const previewImage = document.querySelector('#reader-preview');
 const dialogImage = document.querySelector('#dialog-image');
 const dialog = document.querySelector('#preview-dialog');
+const openPreview = document.querySelector('#open-preview');
+const previewScroll = document.querySelector('#preview-scroll');
+const previewSize = document.querySelector('#preview-size');
+const featureTabs = [...document.querySelectorAll('[data-showcase]')];
 const showcase = {
-  reader: { title: '原文在旁，译文在眼前。', description: '点一下段落，两边同步定位；翻译没结束，也能先读。', tags: ['同步滚动', '边译边读', '位置记忆'], alt: '真实双语阅读界面：左侧原文，右侧中文译文。' },
-  quickread: { title: '先看清主线，再决定深读哪里。', description: '研究问题、方法、发现与局限，先看一遍。', tags: ['文章速读', '阅读路线', '原文引用'], alt: '真实文章速读界面：展示研究问题、方法主线、发现与建议阅读路线。' },
-  citation: { title: '看不懂的这一句，直接问。', description: '带着选段追问，从回答里的引用回到原文。', tags: ['选段提问', '上下文解释', '来源回跳'], alt: '真实引用问答界面：带原文引用的问题、回答与左侧高亮的出处。' },
-  annotations: { title: '原文留在眼前，想法写在旁边。', description: '页旁直接批注，保留作者与时间；点编号回到原文。', tags: ['页旁批注', '自定义署名', '原文定位'], alt: '真实软件的页旁批注：正文保持可见，右侧紧凑卡片显示头像、作者、时间和批注内容。' },
-  notes: { title: '这次读懂的，下次还在。', description: '收藏有用回答，连同引用一起保存。', tags: ['本地笔记', '保留出处', 'Markdown 导出'], alt: '真实阅读笔记界面：保存的问题、回答、引用与 Markdown 导出按钮。' }
+  reader: { title: '对着原文读译文', description: '点击段落，两侧一起定位。翻译运行时，可以先读已完成的部分。', alt: '左侧为英文原文，右侧为中文译文，两栏显示同一篇论文。' },
+  annotations: { panelWidth: 540, title: '把疑问写在原句旁', description: '选中文字，在页旁写下批注。下次阅读时，点击批注编号即可回到这段原文。', alt: '论文右侧的批注卡片显示头像、作者、时间和批注内容。' },
+  quickread: { panelWidth: 680, title: '先了解论文研究了什么', description: '从研究问题、方法和发现读起，再沿着建议的阅读路线回到正文。', alt: '文章速读面板列出研究问题、方法主线、发现与建议阅读路线。' },
+  citation: { panelWidth: 680, title: '带着选中的句子提问', description: '在原文中选取想问的内容，读完回答后，点击引用回到出处。', alt: '助读面板展示与原文选段相关的问题、回答及来源引用。' },
+  notes: { panelWidth: 680, title: '把回答和出处一起保存', description: '将有用的回答收藏到阅读笔记，整理时可导出 Markdown。', alt: '阅读笔记面板显示已保存的问答、来源引用与 Markdown 导出按钮。' }
 };
-let selectedFeature = 'reader';
-let previewTheme = 'light';
+let selectedFeature;
+let previewTheme = root.dataset.theme;
+function featureLabel() {
+  return document.getElementById(`tab-${selectedFeature}`).textContent;
+}
 function setPreview(theme) {
   previewTheme = theme;
+  const mobilePreview = document.querySelector('#reader-mobile-preview');
+  const panelWidth = showcase[selectedFeature].panelWidth;
+  mobilePreview.width = panelWidth || 1600;
+  mobilePreview.height = panelWidth ? 917 : 1000;
+  mobilePreview.srcset = `assets/${selectedFeature}${panelWidth ? '-panel' : ''}-${theme}.png?v=release-0.1.19`;
   previewImage.src = `assets/${selectedFeature}-${theme}.png?v=release-0.1.19`;
-  document.querySelector('#reader-mobile-preview').srcset = `assets/${selectedFeature}${selectedFeature === 'reader' ? '' : '-panel'}-${theme}.png?v=release-0.1.19`;
   previewImage.alt = showcase[selectedFeature].alt;
-  dialogImage.src = previewImage.src;
-  dialogImage.alt = previewImage.alt;
+  openPreview.href = previewImage.src;
+  openPreview.setAttribute('aria-label', `查看${featureLabel()}完整截图`);
   document.querySelector('.workbench').dataset.feature = selectedFeature;
-  document.querySelector('#open-preview').setAttribute('aria-label', `放大查看${document.querySelector(`[data-showcase="${selectedFeature}"] strong`).textContent}的真实界面`);
+  for (const tab of featureTabs) tab.href = `assets/${tab.dataset.showcase}-${theme}.png?v=release-0.1.19`;
   document.querySelectorAll('[data-preview-theme]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.previewTheme === theme)));
 }
 function selectFeature(feature) {
@@ -29,27 +40,52 @@ function selectFeature(feature) {
   const item = showcase[feature];
   document.querySelector('#showcase-title').textContent = item.title;
   document.querySelector('#showcase-description').textContent = item.description;
-  document.querySelector('#showcase-tags').replaceChildren(...item.tags.map(tag => { const span = document.createElement('span'); span.textContent = tag; return span; }));
+  const tryLink = document.querySelector('#showcase-try');
+  const annotation = feature === 'annotations';
+  tryLink.href = annotation ? '#annotate-sample' : '#try-reading';
+  tryLink.toggleAttribute('data-start-annotation', annotation);
+  tryLink.firstChild.textContent = annotation ? '去试写批注 ' : '试读一段 ';
   document.querySelector('#showcase-panel').setAttribute('aria-labelledby', `tab-${feature}`);
-  document.querySelectorAll('[data-showcase]').forEach(tab => {
+  featureTabs.forEach(tab => {
     const active = tab.dataset.showcase === feature;
     tab.setAttribute('aria-selected', String(active));
     tab.tabIndex = active ? 0 : -1;
   });
   setPreview(previewTheme);
 }
-const featureTabs = [...document.querySelectorAll('[data-showcase]')];
+function activateFeature(tab) {
+  selectFeature(tab.dataset.showcase);
+  if (location.hash !== `#${tab.id}`) history.pushState(null, '', `#${tab.id}`);
+}
+function selectLinkedFeature() {
+  const tab = featureTabs.find(tab => location.hash === `#${tab.id}`);
+  if (tab) selectFeature(tab.dataset.showcase);
+  else if (!selectedFeature || !location.hash || location.hash === '#experience') selectFeature('reader');
+}
+addEventListener('hashchange', selectLinkedFeature);
+document.querySelector('.showcase-tabs').setAttribute('role', 'tablist');
+document.querySelector('.preview-themes').hidden = false;
+const showcasePanel = document.querySelector('#showcase-panel');
+showcasePanel.setAttribute('role', 'tabpanel');
+showcasePanel.tabIndex = 0;
 featureTabs.forEach((tab, index) => {
-  tab.addEventListener('click', () => selectFeature(tab.dataset.showcase));
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-controls', 'showcase-panel');
+  tab.addEventListener('click', event => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    activateFeature(tab);
+  });
   tab.addEventListener('keydown', event => {
     let next;
     if (event.key === 'ArrowRight') next = (index + 1) % featureTabs.length;
     if (event.key === 'ArrowLeft') next = (index - 1 + featureTabs.length) % featureTabs.length;
     if (event.key === 'Home') next = 0;
     if (event.key === 'End') next = featureTabs.length - 1;
+    if (event.key === ' ') next = index;
     if (next === undefined) return;
     event.preventDefault();
-    selectFeature(featureTabs[next].dataset.showcase);
+    activateFeature(featureTabs[next]);
     featureTabs[next].focus();
   });
 });
@@ -58,16 +94,42 @@ function applyTheme(theme) {
   themeButton.setAttribute('aria-label', `切换到${theme === 'dark' ? '浅' : '深'}色主题`);
   themeButton.title = themeButton.getAttribute('aria-label');
   document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#121418' : '#f4f1ea';
-  setPreview(theme);
 }
 applyTheme(root.dataset.theme);
+themeButton.hidden = false;
+selectLinkedFeature();
+previewImage.parentElement.hidden = false;
 themeButton.addEventListener('click', () => {
   const theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(theme);
+  setPreview(theme);
   try { localStorage.setItem('parallel-site-theme', theme); } catch {}
 });
 document.querySelectorAll('[data-preview-theme]').forEach(button => button.addEventListener('click', () => setPreview(button.dataset.previewTheme)));
-document.querySelector('#open-preview').addEventListener('click', () => dialog.showModal());
+function setPreviewZoom(original, point) {
+  const rect = dialogImage.getBoundingClientRect();
+  const panelWidth = showcase[selectedFeature].panelWidth;
+  dialog.dataset.original = String(original);
+  previewSize.textContent = original ? '适应窗口' : '原始尺寸';
+  if (original && point) {
+    const x = (point.clientX - rect.left) / rect.width;
+    const y = (point.clientY - rect.top) / rect.height;
+    previewScroll.scrollTo(x * dialogImage.offsetWidth - previewScroll.clientWidth / 2, y * dialogImage.offsetHeight - previewScroll.clientHeight / 2);
+  } else {
+    previewScroll.scrollTo(original && panelWidth ? dialogImage.offsetWidth - panelWidth : 0, 0);
+  }
+}
+openPreview.addEventListener('click', event => {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !dialog.showModal) return;
+  event.preventDefault();
+  dialogImage.src = openPreview.href;
+  dialogImage.alt = previewImage.alt;
+  document.querySelector('#preview-heading').textContent = `${featureLabel()} · ${previewTheme === 'dark' ? '深色' : '浅色'}`;
+  dialog.showModal();
+  setPreviewZoom(false);
+});
+previewSize.addEventListener('click', () => setPreviewZoom(dialog.dataset.original !== 'true'));
+dialogImage.addEventListener('click', event => setPreviewZoom(dialog.dataset.original !== 'true', event));
 document.querySelector('#close-preview').addEventListener('click', () => dialog.close());
 dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
 document.querySelector('#copy-checksum').addEventListener('click', async () => {
@@ -79,115 +141,35 @@ document.querySelector('#copy-checksum').addEventListener('click', async () => {
 });
 document.querySelector('a[href="#attribution"]').addEventListener('click', () => { document.querySelector('#attribution').open = true; });
 
-// Keep the paper's original rotation; motion uses the separate translate property.
-const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
-const motionButton = document.querySelector('#motion-toggle');
-const entranceAnimations = new Set();
-let motionPaused = false;
-try { motionPaused = localStorage.getItem('parallel-site-motion') === 'off'; } catch {}
-function updateMotion() {
-  const enabled = !motionPaused && !motionPreference.matches;
-  root.dataset.motion = enabled ? 'on' : 'off';
-  const label = motionPreference.matches ? '已跟随系统减少动态效果' : enabled ? '暂停网页动效' : '开启网页动效';
-  motionButton.setAttribute('aria-label', label);
-  motionButton.title = label;
-  motionButton.querySelector('span').textContent = motionPreference.matches ? '动效已关闭' : enabled ? '暂停动效' : '开启动效';
-  motionButton.disabled = motionPreference.matches;
-  motionButton.hidden = false;
-  if (!enabled) {
-    for (const animation of entranceAnimations) animation.cancel();
-    entranceAnimations.clear();
-  }
-  document.dispatchEvent(new CustomEvent('parallel-motion-change', { detail: { enabled } }));
+const navToggle = document.querySelector('#nav-toggle');
+const navigation = document.querySelector('#site-navigation');
+const header = document.querySelector('.site-header');
+const compactNav = matchMedia('(max-width: 800px)');
+function setMenu(open) {
+  navToggle.setAttribute('aria-expanded', String(open));
+  header.classList.toggle('menu-open', open);
 }
-motionButton.addEventListener('click', () => {
-  motionPaused = !motionPaused;
-  try { localStorage.setItem('parallel-site-motion', motionPaused ? 'off' : 'on'); } catch {}
-  updateMotion();
+function syncMenu() {
+  setMenu(false);
+  navToggle.hidden = !compactNav.matches;
+  header.classList.toggle('compact-nav', compactNav.matches);
+}
+navToggle.addEventListener('click', () => setMenu(navToggle.getAttribute('aria-expanded') !== 'true'));
+navigation.addEventListener('click', event => {
+  const link = event.target.closest('a');
+  if (!link || !compactNav.matches) return;
+  setMenu(false);
 });
-motionPreference.addEventListener('change', updateMotion);
-updateMotion();
-
-// Replay entrances from either direction after the content has fully left the viewport.
-// Layout coordinates stay stable while the element's own transform is animating.
-const entranceTargets = [...document.querySelectorAll('.section-heading, .workbench, .sample-workspace, .capability-card, .reading-note, .steps li, .download-intro, .download-card, .faq>div, .footer-top')];
-const entranceStates = new Map(entranceTargets.map(element => [element, { entered: false, animation: null }]));
-let entranceFrame = 0;
-let lastEntranceScroll = scrollY;
-let entranceDirection = 1;
-document.querySelectorAll('.capability-card, .steps li').forEach((element, index) => {
-  element.dataset.motionDelay = String((index % 3) * 100);
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || navToggle.getAttribute('aria-expanded') !== 'true') return;
+  setMenu(false);
+  navToggle.focus();
 });
-function stopEntrance(state) {
-  if (!state.animation) return;
-  entranceAnimations.delete(state.animation);
-  state.animation.cancel();
-  state.animation = null;
-}
-function scanEntrances() {
-  entranceFrame = 0;
-  if (document.hidden) return;
-  const currentScroll = scrollY;
-  if (Math.abs(currentScroll - lastEntranceScroll) > .5) entranceDirection = currentScroll > lastEntranceScroll ? 1 : -1;
-  lastEntranceScroll = currentScroll;
-  const inset = Math.min(40, innerHeight * .08);
-  const bounds = entranceTargets.map(element => {
-    let top = 0;
-    for (let parent = element; parent; parent = parent.offsetParent) top += parent.offsetTop;
-    return { element, top: top - currentScroll, bottom: top + element.offsetHeight - currentScroll };
-  });
-  for (const { element, top, bottom } of bounds) {
-    const state = entranceStates.get(element);
-    if (bottom <= -48 || top >= innerHeight + 48) {
-      state.entered = false;
-      stopEntrance(state);
-      continue;
-    }
-    if (state.entered || top >= innerHeight - inset || bottom <= inset) continue;
-    state.entered = true;
-    if (root.dataset.motion !== 'on' || element.contains(document.activeElement)) continue;
-    const direction = entranceDirection;
-    const wide = innerWidth > 800;
-    let from = `translateY(${direction * 34}px)`;
-    if (element.matches('.workbench')) from = `perspective(1400px) translateY(${direction * 48}px) rotateX(${direction * 4}deg) scale(.97)`;
-    if (wide && element.matches('.capability-card')) from = `translate(${(Array.from(element.parentElement.children).indexOf(element) % 3 - 1) * 24}px, ${direction * 30}px)`;
-    if (wide && element.matches('.download-intro')) from = `translate(-38px, ${direction * 18}px)`;
-    if (wide && element.matches('.download-card')) from = `translate(38px, ${direction * 18}px) rotate(${direction * 1.5}deg)`;
-    const animation = element.animate([
-      { opacity: 0, transform: from },
-      { opacity: 1, transform: 'none' }
-    ], { duration: element.matches('.workbench') ? 900 : 720, delay: Number(element.dataset.motionDelay || 0), easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
-    animation.id = 'parallel-entrance';
-    state.animation = animation;
-    entranceAnimations.add(animation);
-    const release = () => {
-      entranceAnimations.delete(animation);
-      if (state.animation === animation) state.animation = null;
-    };
-    animation.finished.then(release, release);
-  }
-}
-function queueEntranceScan() {
-  if (!entranceFrame) entranceFrame = requestAnimationFrame(scanEntrances);
-}
-addEventListener('scroll', queueEntranceScan, { passive: true });
-addEventListener('resize', queueEntranceScan);
-document.addEventListener('visibilitychange', queueEntranceScan);
-document.addEventListener('focusin', event => {
-  for (const element of entranceTargets) if (element.contains(event.target)) stopEntrance(entranceStates.get(element));
+document.addEventListener('pointerdown', event => {
+  if (!navigation.contains(event.target) && !navToggle.contains(event.target)) setMenu(false);
 });
-if ('ResizeObserver' in window) {
-  const entranceSizes = new ResizeObserver(queueEntranceScan);
-  entranceTargets.forEach(element => entranceSizes.observe(element));
-}
-document.fonts?.ready.then(queueEntranceScan);
-queueEntranceScan();
-if ('IntersectionObserver' in window) {
-  const heroVisibility = new IntersectionObserver(([entry]) => {
-    root.dataset.heroVisible = String(entry.isIntersecting);
-  });
-  heroVisibility.observe(document.querySelector('.hero-art'));
-}
-function updatePageVisibility() { root.dataset.pageHidden = String(document.hidden); }
-document.addEventListener('visibilitychange', updatePageVisibility);
-updatePageVisibility();
+header.addEventListener('focusout', event => {
+  if (!header.contains(event.relatedTarget)) setMenu(false);
+});
+compactNav.addEventListener('change', syncMenu);
+syncMenu();
