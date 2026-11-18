@@ -12,9 +12,9 @@
   <link rel="icon" href="assets/parallel.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=wide-layout-1">
   <link rel="stylesheet" href="motion.css?v=scroll-motion-1">
-  <link rel="stylesheet" href="features.css?v=wide-layout-1">
+  <link rel="stylesheet" href="features.css?v=showcase-2">
   <script src="theme.js?v=reader-ux-2"></script>
-  <script src="site.js?v=wide-layout-1" defer></script>
+  <script src="site.js?v=showcase-2" defer></script>
   <script src="motion.js?v=scroll-motion-1" defer></script>
   <script src="features.js?v=reader-ux-4" defer></script>
 </head>
@@ -75,8 +75,9 @@
       <div class="workbench" data-feature="reader">
         <div class="window-bar"><div class="window-brand"><img src="assets/parallel.svg" width="22" height="22" alt=""><span>页间 Parallel</span></div><span class="window-note">真实软件界面 · 离线教学示例</span><div class="preview-themes" role="group" aria-label="界面截图主题" hidden><button type="button" data-preview-theme="light" aria-pressed="true">浅色</button><button type="button" data-preview-theme="dark" aria-pressed="false">深色</button></div></div>
         <a class="screenshot-button" id="open-preview" href="assets/reader-light.png?v=release-0.1.19" aria-label="查看双语对照完整截图">
-          <picture hidden><source id="reader-mobile-preview" media="(max-width: 800px)"><img id="reader-preview" width="1600" height="1000" loading="lazy" alt=""></picture>
+          <picture id="preview-picture" hidden><img id="reader-preview" width="1600" height="1000" alt=""></picture>
           <noscript><picture><img src="assets/reader-light.png?v=release-0.1.19" width="1600" height="1000" alt="左侧为英文原文，右侧为中文译文，两栏显示同一篇论文。"></picture></noscript>
+          <span id="preview-status" role="status" hidden></span>
           <span class="enlarge-label">查看完整截图 <span aria-hidden="true">↗</span></span>
         </a>
       </div>

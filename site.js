@@ -1,8 +1,12 @@
 'use strict';
 const root = document.documentElement;
 const themeButton = document.querySelector('#theme-toggle');
-const previewImage = document.querySelector('#reader-preview');
-const dialogImage = document.querySelector('#dialog-image');
+const previewPicture = document.querySelector('#preview-picture');
+const previewPlaceholder = document.querySelector('#reader-preview');
+const previewStatus = document.querySelector('#preview-status');
+const compactPreview = matchMedia('(max-width: 800px)');
+const preparedPreviews = new Map();
+let dialogImage = document.querySelector('#dialog-image');
 const dialog = document.querySelector('#preview-dialog');
 const openPreview = document.querySelector('#open-preview');
 const previewScroll = document.querySelector('#preview-scroll');
@@ -17,23 +21,85 @@ const showcase = {
 };
 let selectedFeature;
 let previewTheme = root.dataset.theme;
+let galleryNearby = false;
+let requestedFrame;
 function featureLabel() {
   return document.getElementById(`tab-${selectedFeature}`).textContent;
 }
+function fullScreenshot(feature, theme) {
+  return `assets/${feature}-${theme}.png?v=release-0.1.19`;
+}
+function preparePreview(feature, priority) {
+  const panelWidth = compactPreview.matches && showcase[feature].panelWidth;
+  const name = `${feature}${panelWidth ? '-panel' : ''}-${previewTheme}`;
+  let frame = preparedPreviews.get(name);
+  if (frame) {
+    if (priority === 'high') frame.image.fetchPriority = 'high';
+    return frame;
+  }
+  const image = new Image(panelWidth || 1600, panelWidth ? 917 : 1000);
+  image.alt = showcase[feature].alt;
+  image.decoding = 'async';
+  image.fetchPriority = priority;
+  image.src = `assets/preview/${name}.webp`;
+  frame = { image, ready: false };
+  preparedPreviews.set(name, frame);
+  frame.loaded = image.decode().catch(() => {
+    image.src = `assets/${name}.png?v=release-0.1.19`;
+    return image.decode();
+  }).then(() => {
+    frame.ready = true;
+  }, () => {
+    if (preparedPreviews.get(name) === frame) preparedPreviews.delete(name);
+  });
+  return frame;
+}
+function warmPreviews() {
+  if (galleryNearby && !navigator.connection?.saveData) {
+    for (const tab of featureTabs) preparePreview(tab.dataset.showcase, 'low');
+  }
+}
 function setPreview(theme) {
+  if (theme !== previewTheme) preparedPreviews.clear();
   previewTheme = theme;
-  const mobilePreview = document.querySelector('#reader-mobile-preview');
-  const panelWidth = showcase[selectedFeature].panelWidth;
-  mobilePreview.width = panelWidth || 1600;
-  mobilePreview.height = panelWidth ? 917 : 1000;
-  mobilePreview.srcset = `assets/${selectedFeature}${panelWidth ? '-panel' : ''}-${theme}.png?v=release-0.1.19`;
-  previewImage.src = `assets/${selectedFeature}-${theme}.png?v=release-0.1.19`;
-  previewImage.alt = showcase[selectedFeature].alt;
-  openPreview.href = previewImage.src;
+  const frame = preparePreview(selectedFeature, 'high');
+  const index = featureTabs.findIndex(tab => tab.dataset.showcase === selectedFeature);
+  previewPicture.style.setProperty('--preview-strip', `url("assets/preview/strip-${compactPreview.matches ? 'panel-' : ''}${theme}.webp")`);
+  previewPicture.style.setProperty('--preview-position', `${index / (featureTabs.length - 1) * 100}%`);
+  previewPicture.style.setProperty('--preview-ratio', `${frame.image.getAttribute('width')} / ${frame.image.getAttribute('height')}`);
+  requestedFrame = frame;
+  previewPlaceholder.width = Number(frame.image.getAttribute('width'));
+  previewPlaceholder.height = Number(frame.image.getAttribute('height'));
+  previewPlaceholder.alt = frame.image.alt;
+  frame.image.id = 'reader-preview';
+  // Keep a downloading image detached. Inserting it into a picture can interrupt decode().
+  const currentImage = frame.ready ? frame.image : previewPlaceholder;
+  if (previewPicture.firstElementChild !== currentImage) previewPicture.replaceChildren(currentImage);
+  previewPicture.hidden = false;
+  openPreview.classList.remove('preview-unavailable');
+  openPreview.setAttribute('aria-busy', String(!frame.ready));
+  previewStatus.hidden = frame.ready;
+  if (!frame.ready) {
+    previewStatus.textContent = `正在载入「${featureLabel()}」清晰图…`;
+    frame.loaded.then(() => {
+      // A slower download must never replace a newer selection.
+      if (requestedFrame !== frame) return;
+      openPreview.setAttribute('aria-busy', 'false');
+      previewStatus.hidden = frame.ready;
+      if (frame.ready) {
+        if (previewPicture.firstElementChild !== frame.image) previewPicture.replaceChildren(frame.image);
+      } else {
+        openPreview.classList.add('preview-unavailable');
+        previewStatus.textContent = '清晰预览加载失败，可点击查看完整截图';
+      }
+    });
+  }
+  openPreview.href = fullScreenshot(selectedFeature, theme);
   openPreview.setAttribute('aria-label', `查看${featureLabel()}完整截图`);
   document.querySelector('.workbench').dataset.feature = selectedFeature;
-  for (const tab of featureTabs) tab.href = `assets/${tab.dataset.showcase}-${theme}.png?v=release-0.1.19`;
+  for (const tab of featureTabs) tab.href = fullScreenshot(tab.dataset.showcase, theme);
   document.querySelectorAll('[data-preview-theme]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.previewTheme === theme)));
+  warmPreviews();
 }
 function selectFeature(feature) {
   selectedFeature = feature;
@@ -78,6 +144,9 @@ showcasePanel.tabIndex = 0;
 featureTabs.forEach((tab, index) => {
   tab.setAttribute('role', 'tab');
   tab.setAttribute('aria-controls', 'showcase-panel');
+  const prepareTab = () => preparePreview(tab.dataset.showcase, 'high');
+  tab.addEventListener('pointerenter', prepareTab);
+  tab.addEventListener('focus', prepareTab);
   tab.addEventListener('click', event => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -105,7 +174,17 @@ function applyTheme(theme) {
 applyTheme(root.dataset.theme);
 themeButton.hidden = false;
 selectLinkedFeature();
-previewImage.parentElement.hidden = false;
+compactPreview.addEventListener('change', () => {
+  preparedPreviews.clear();
+  setPreview(previewTheme);
+});
+if ('IntersectionObserver' in window) {
+  const galleryObserver = new IntersectionObserver(([entry]) => {
+    galleryNearby = entry.isIntersecting;
+    warmPreviews();
+  }, { rootMargin: '480px 0px' });
+  galleryObserver.observe(document.querySelector('#experience'));
+}
 themeButton.addEventListener('click', () => {
   const theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(theme);
@@ -129,14 +208,24 @@ function setPreviewZoom(original, point) {
 openPreview.addEventListener('click', event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !dialog.showModal) return;
   event.preventDefault();
-  dialogImage.src = openPreview.href;
-  dialogImage.alt = previewImage.alt;
+  if (dialogImage.src !== openPreview.href) {
+    const original = new Image(1600, 1000);
+    original.id = 'dialog-image';
+    original.alt = showcase[selectedFeature].alt;
+    const position = previewPicture.style.getPropertyValue('--preview-position');
+    original.style.background = `url("assets/preview/strip-${previewTheme}.webp") ${position} top / 500% 100% no-repeat`;
+    original.src = openPreview.href;
+    dialogImage.replaceWith(original);
+    dialogImage = original;
+  }
   document.querySelector('#preview-heading').textContent = `${featureLabel()} · ${previewTheme === 'dark' ? '深色' : '浅色'}`;
   dialog.showModal();
   setPreviewZoom(false);
 });
 previewSize.addEventListener('click', () => setPreviewZoom(dialog.dataset.original !== 'true'));
-dialogImage.addEventListener('click', event => setPreviewZoom(dialog.dataset.original !== 'true', event));
+previewScroll.addEventListener('click', event => {
+  if (event.target === dialogImage) setPreviewZoom(dialog.dataset.original !== 'true', event);
+});
 document.querySelector('#close-preview').addEventListener('click', () => dialog.close());
 dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
 document.querySelector('#copy-checksum').addEventListener('click', async () => {

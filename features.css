@@ -67,6 +67,29 @@
 #showcase-panel:focus-visible{outline:2px solid var(--accent);outline-offset:8px;border-radius:8px}
 .screenshot-button picture{display:block}
 .screenshot-button picture>img{display:block;width:100%;height:auto;aspect-ratio:1.6;object-fit:contain;background:var(--surface)}
+#preview-picture { position: relative; isolation: isolate; }
+#preview-picture::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 auto;
+  aspect-ratio: var(--preview-ratio, 1.6);
+  background: var(--surface) var(--preview-strip) var(--preview-position, 0%) top / 500% 100% no-repeat;
+}
+#open-preview[aria-busy=true] #reader-preview, #open-preview.preview-unavailable #reader-preview {
+  visibility: hidden;
+  aspect-ratio: var(--preview-ratio);
+}
+#preview-status {
+  position: absolute;
+  top: 12px; left: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: 12px/1.6 var(--sans);
+}
 .experience .preview-caption { margin: 8px 0 0; font-size: 12px; }
 .experience .preview-caption a { display: inline-flex; align-items: center; min-height: 40px; gap: 4px; }
 .try-reading{padding-top:75px;padding-bottom:90px}
