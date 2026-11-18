@@ -6,6 +6,12 @@
 
 **[下载 Windows 安装包](https://xia-j-b.github.io/ParallelTranslation/#download)** · [最新版本与更新说明](https://github.com/XIA-J-B/ParallelTranslation/releases/latest) · [官网试读](https://xia-j-b.github.io/ParallelTranslation/)
 
+<!-- release-notes:start -->
+
+[v0.1.21 批注与价格更新说明](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.21) · [全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
+
+<!-- release-notes:end -->
+
 ## 安装与更新
 
 首次安装时，从官网下载 x64 安装包并运行。已安装的用户可在「版本与更新」中点击「检查更新」。软件运行时也会每小时检查新版并在后台下载，下载完成后点击「安装并重启」即可升级。本机论文、译文、笔记、设置和阅读记录都会保留。
@@ -15,8 +21,6 @@
 1. 在原文或译文中选中要讨论的句子，点击「批注」写下问题并保存。之后可以点击页边编号回到这条讨论。
 2. 在阅读器右上角点击「导出」，选择原文、译文或双语对照。发 Word 文档时，同事可以在 Word 中回复批注。发 PDF 时，同事可以在 WPS 中回复，也可以在 Zotero 中添加便笺后选择「导出 PDF」。
 3. 把同事发回的 PDF 或 DOCX 拖入页间首页。识别到原论文后，选择「合并批注到原论文」，便可在原处查看反馈。遇到无法定位的选区，页间会保留意见和引文，并提示你核对位置。
-
-[v0.1.21 批注与价格更新说明](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.21) · [全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
 
 ## 试用与订阅
 
