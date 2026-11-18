@@ -8,7 +8,19 @@
 
 <!-- release-notes:start -->
 
-[v0.1.21 批注与价格更新说明](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.21) · [全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
+## 最新版本 · [v0.1.21](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.21)
+
+### 在论文旁写批注，发给同事接着聊
+
+- 选中文字，点「批注」，就能在文字旁写下想法。点页边编号，可以再打开这条讨论。
+- 保存批注后，导出 PDF 发给同事。对方可用 WPS 直接回复，也可用 Zotero 添加便笺后「导出 PDF」。
+- 把同事发回的文件拖入页间首页，选择「合并批注到原论文」，就能在对应位置看到反馈。
+
+### MAX 终身版降价
+
+- MAX 终身版的一次性买断价格从 50 元降至 20 元。
+
+[全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
 
 <!-- release-notes:end -->
 
