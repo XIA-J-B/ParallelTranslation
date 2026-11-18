@@ -63,7 +63,14 @@ function selectLinkedFeature() {
   else if (!selectedFeature || !location.hash || location.hash === '#experience') selectFeature('reader');
 }
 addEventListener('hashchange', selectLinkedFeature);
-document.querySelector('.showcase-tabs').setAttribute('role', 'tablist');
+const showcaseTabs = document.querySelector('.showcase-tabs');
+const wideShowcase = matchMedia('(min-width: 1500px)');
+function updateShowcaseOrientation() {
+  showcaseTabs.setAttribute('aria-orientation', wideShowcase.matches ? 'vertical' : 'horizontal');
+}
+showcaseTabs.setAttribute('role', 'tablist');
+updateShowcaseOrientation();
+wideShowcase.addEventListener('change', updateShowcaseOrientation);
 document.querySelector('.preview-themes').hidden = false;
 const showcasePanel = document.querySelector('#showcase-panel');
 showcasePanel.setAttribute('role', 'tabpanel');
@@ -78,8 +85,8 @@ featureTabs.forEach((tab, index) => {
   });
   tab.addEventListener('keydown', event => {
     let next;
-    if (event.key === 'ArrowRight') next = (index + 1) % featureTabs.length;
-    if (event.key === 'ArrowLeft') next = (index - 1 + featureTabs.length) % featureTabs.length;
+    if (event.key === 'ArrowRight' || (wideShowcase.matches && event.key === 'ArrowDown')) next = (index + 1) % featureTabs.length;
+    if (event.key === 'ArrowLeft' || (wideShowcase.matches && event.key === 'ArrowUp')) next = (index - 1 + featureTabs.length) % featureTabs.length;
     if (event.key === 'Home') next = 0;
     if (event.key === 'End') next = featureTabs.length - 1;
     if (event.key === ' ') next = index;
