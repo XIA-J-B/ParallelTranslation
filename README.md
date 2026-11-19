@@ -8,11 +8,9 @@
 
 <!-- release-notes:start -->
 
-## 最新版本 · [v0.1.27](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.27)
+## 最新版本 · [v0.1.28](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.28)
 
-修复了更新后文档库一直显示“正在读取文档库…”的问题。现在先列出已保存的论文，打开时再更新这篇论文的翻译进度。
-
-如果读取失败，点“重新读取”就能再试一次，无需重启。
+继续下载或安装已下载的更新前，页间会再检查一次版本。如果已有新版，就直接下载最新版，省去安装中间版本的步骤。
 
 [全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
 
