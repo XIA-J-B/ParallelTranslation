@@ -8,9 +8,15 @@
 
 <!-- release-notes:start -->
 
-## 最新版本 · [v0.1.28](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.28)
+## 最新版本 · [v0.1.29](https://github.com/XIA-J-B/ParallelTranslation/releases/tag/v0.1.29)
 
-继续下载或安装已下载的更新前，页间会再检查一次版本。如果已有新版，就直接下载最新版，省去安装中间版本的步骤。
+修复图中多行标签只翻译一半、照片标注遗漏的问题，保留设备型号、图片和箭头。已有文档重新打开后，可点“继续翻译”补齐新识别的标签。
+
+修复译文划线混入邻栏、原文对应不完整的问题。能确认原选区的旧高亮会自动修正，保留颜色和批注。
+
+点击原文或译文文字块时，对应区域会高亮，两栏保持当前位置。Shift 多选和参考文献点击的对应也已修正。
+
+文章速读简化为“研究问题”“主要做法”“核心结论”。旧结果仍可查看；想用新版，可在“更多”中选择“重新生成文章速读”。
 
 [全部版本记录](https://github.com/XIA-J-B/ParallelTranslation/releases)
 
